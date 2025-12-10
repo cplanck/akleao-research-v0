@@ -1,0 +1,30 @@
+[project]
+name = "simage-rag"
+version = "0.1.0"
+description = "RAG microservice for document ingestion and querying"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "pinecone>=5.0.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.0.0",
+    "markdown>=3.5.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "sqlalchemy>=2.0.0",
+    "python-multipart>=0.0.12",
+    "aiofiles>=24.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
