@@ -2,11 +2,14 @@
 
 import os
 import requests
-from typing import Iterator, Callable
+from typing import Iterator, Callable, Optional
 from dataclasses import dataclass
 from anthropic import Anthropic
 
 from .retriever import Retriever, RetrievalResult
+
+# Beta header for interleaved thinking with tool use
+INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 
 
 @dataclass
@@ -141,7 +144,7 @@ def build_tools(has_documents: bool, has_web_search: bool) -> list:
 @dataclass
 class AgentEvent:
     """Event emitted by the agent during processing."""
-    type: str  # "status", "tool_call", "tool_result", "chunk"
+    type: str  # "status", "tool_call", "tool_result", "chunk", "thinking"
     data: dict
 
 
@@ -153,12 +156,14 @@ class Agent:
         retriever: Retriever,
         api_key: str = None,
         model: str = "claude-sonnet-4-20250514",
-        max_tokens: int = 1024,
-        tavily_api_key: str = None
+        max_tokens: int = 16000,  # Increased for extended thinking
+        tavily_api_key: str = None,
+        thinking_budget: int = 4096  # Budget for extended thinking tokens
     ):
         self.retriever = retriever
         self.model = model
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget
         self.client = Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
         self.tavily_api_key = tavily_api_key or os.getenv("TAVILY_API_KEY")
 
@@ -322,9 +327,13 @@ class Agent:
         namespace: str = "",
         top_k: int = 5,
         has_documents: bool = True,
-        resources: list[ResourceInfo] = None
+        resources: list[ResourceInfo] = None,
+        enable_thinking: bool = True
     ) -> Iterator[AgentEvent]:
-        """Stream a conversation turn with events for UI updates."""
+        """Stream a conversation turn with events for UI updates.
+
+        Supports extended thinking which streams the agent's reasoning process.
+        """
         messages = list(conversation_history or [])
         messages.append({"role": "user", "content": message})
 
@@ -335,25 +344,93 @@ class Agent:
         tools = build_tools(has_documents, has_web_search)
         system_prompt = build_system_prompt(has_documents, has_web_search, resources)
 
+        # Build thinking config if enabled
+        thinking_config = None
+        if enable_thinking and self.thinking_budget > 0:
+            thinking_config = {
+                "type": "enabled",
+                "budget_tokens": self.thinking_budget
+            }
+
         # Agentic loop
         while True:
             # Signal thinking status
             yield AgentEvent("status", {"status": "thinking"})
 
-            # First, make a non-streaming call to check for tool use
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system_prompt,
-                tools=tools if tools else None,
-                messages=messages
-            )
+            # Use streaming with extended thinking to capture reasoning
+            # We need to handle the stream to capture thinking blocks
+            thinking_content = ""
+            response_content = []
+            stop_reason = None
 
-            if response.stop_reason == "tool_use":
+            # Build API call kwargs
+            api_kwargs = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "system": system_prompt,
+                "messages": messages,
+            }
+            if tools:
+                api_kwargs["tools"] = tools
+            if thinking_config:
+                api_kwargs["thinking"] = thinking_config
+
+            # Use interleaved thinking beta header for tool use with thinking
+            extra_headers = {}
+            if thinking_config and tools:
+                extra_headers["anthropic-beta"] = INTERLEAVED_THINKING_BETA
+
+            with self.client.messages.stream(
+                **api_kwargs,
+                extra_headers=extra_headers if extra_headers else None
+            ) as stream:
+                current_block_type = None
+
+                for event in stream:
+                    if event.type == "content_block_start":
+                        current_block_type = event.content_block.type
+                        if current_block_type == "thinking":
+                            # Start of thinking block
+                            pass
+                        elif current_block_type == "text":
+                            # Start of text block
+                            pass
+                        elif current_block_type == "tool_use":
+                            # Capture tool use block
+                            response_content.append(event.content_block)
+
+                    elif event.type == "content_block_delta":
+                        if hasattr(event.delta, "thinking"):
+                            # Stream thinking content
+                            thinking_content += event.delta.thinking
+                            yield AgentEvent("thinking", {"content": event.delta.thinking})
+                        elif hasattr(event.delta, "text"):
+                            # Stream text content (but we might need to handle tool use first)
+                            yield AgentEvent("chunk", {"content": event.delta.text})
+                        elif hasattr(event.delta, "partial_json"):
+                            # Tool use input being streamed
+                            pass
+
+                    elif event.type == "content_block_stop":
+                        current_block_type = None
+
+                    elif event.type == "message_delta":
+                        stop_reason = event.delta.stop_reason
+
+                # Get the final message for tool use handling
+                final_response = stream.get_final_message()
+                response_content = final_response.content
+
+            if stop_reason == "tool_use":
                 # Process tool calls
                 tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
+                thinking_blocks = []
+
+                for block in response_content:
+                    # Preserve thinking blocks for the conversation
+                    if block.type == "thinking":
+                        thinking_blocks.append(block)
+                    elif block.type == "tool_use":
                         if block.name == "search_documents":
                             query = block.input.get("query", message)
 
@@ -425,26 +502,17 @@ class Agent:
                     })
 
                 # Add to messages and continue loop
-                messages.append({"role": "assistant", "content": response.content})
+                # Must preserve thinking blocks when passing back for tool results
+                messages.append({"role": "assistant", "content": response_content})
                 messages.append({"role": "user", "content": tool_results})
             else:
-                # No tool use - stream the final response
+                # No tool use - we've already streamed the response
                 # Send empty sources if no search was done
                 if not all_sources:
                     yield AgentEvent("sources", {"sources": []})
 
-                # Signal responding status
+                # Signal responding status (already streamed above)
                 yield AgentEvent("status", {"status": "responding"})
-
-                with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=system_prompt,
-                    tools=tools if tools else None,
-                    messages=messages
-                ) as stream:
-                    for text in stream.text_stream:
-                        yield AgentEvent("chunk", {"content": text})
 
                 yield AgentEvent("done", {})
                 return

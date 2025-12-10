@@ -184,6 +184,9 @@ def query_workspace_stream(
                     yield f"data: {json.dumps({'type': 'sources', 'sources': list(seen.values())})}\n\n"
                     sources_sent = True
 
+                elif event.type == "thinking":
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': event.data['content']})}\n\n"
+
                 elif event.type == "chunk":
                     yield f"data: {json.dumps({'type': 'chunk', 'content': event.data['content']})}\n\n"
 
