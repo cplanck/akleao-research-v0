@@ -1,6 +1,7 @@
 """Agentic LLM module - conversational assistant with tool use."""
 
 import os
+import re
 import requests
 from typing import Iterator, Callable, Optional
 from dataclasses import dataclass
@@ -18,6 +19,81 @@ class AgentResponse:
     content: str
     sources: list[RetrievalResult]
     used_search: bool
+
+
+@dataclass
+class ThinkingConfig:
+    """Configuration for extended thinking based on query complexity."""
+    enabled: bool
+    budget_tokens: int
+    reason: str  # Why this config was chosen
+
+
+# Patterns for simple queries that don't need thinking
+SIMPLE_QUERY_PATTERNS = [
+    # Greetings
+    r"^(hi|hello|hey|howdy|greetings|good morning|good afternoon|good evening)[\s!.?]*$",
+    # Acknowledgments
+    r"^(thanks|thank you|thx|ty|ok|okay|cool|great|perfect|awesome|nice|got it|understood|i see|makes sense)[\s!.?]*$",
+    # Single word responses
+    r"^(yes|no|yep|nope|sure|maybe|probably|absolutely|definitely|correct|right|wrong)[\s!.?]*$",
+    # Farewells
+    r"^(bye|goodbye|see ya|later|take care|cheers)[\s!.?]*$",
+]
+
+# Patterns for "think deeper" requests that need extended budget
+DEEP_THINKING_PATTERNS = [
+    r"think (harder|deeper|more|carefully|thoroughly|about it|on it|this through)",
+    r"(really|carefully|thoroughly|deeply) (think|consider|analyze|examine)",
+    r"take your time",
+    r"(analyze|examine|consider|review) (this |it )?(carefully|thoroughly|deeply|in detail)",
+    r"give (this |it )?(more|careful|thorough|deep) (thought|consideration|analysis)",
+    r"(more|deeper|thorough|detailed|careful) analysis",
+    r"think step by step",
+    r"let's think",
+    r"reason (through|about)",
+]
+
+
+def analyze_query_complexity(
+    message: str,
+    base_budget: int = 4096,
+    deep_budget: int = 10000
+) -> ThinkingConfig:
+    """Analyze query complexity to determine thinking configuration.
+
+    Returns:
+        ThinkingConfig with:
+        - Simple queries: thinking disabled (instant response)
+        - Normal queries: standard thinking budget
+        - Deep thinking requests: extended budget for thorough analysis
+    """
+    msg_lower = message.strip().lower()
+
+    # Check for simple queries first (no thinking needed)
+    for pattern in SIMPLE_QUERY_PATTERNS:
+        if re.match(pattern, msg_lower, re.IGNORECASE):
+            return ThinkingConfig(
+                enabled=False,
+                budget_tokens=0,
+                reason="simple_query"
+            )
+
+    # Check for explicit "think deeper" requests (extended budget)
+    for pattern in DEEP_THINKING_PATTERNS:
+        if re.search(pattern, msg_lower, re.IGNORECASE):
+            return ThinkingConfig(
+                enabled=True,
+                budget_tokens=deep_budget,
+                reason="deep_thinking_requested"
+            )
+
+    # Default: normal thinking with standard budget
+    return ThinkingConfig(
+        enabled=True,
+        budget_tokens=base_budget,
+        reason="normal_query"
+    )
 
 
 # Tool definitions for Claude
@@ -92,9 +168,18 @@ class ResourceInfo:
     status: str  # "ready", "pending", "indexing", "failed"
 
 
-def build_system_prompt(has_documents: bool, has_web_search: bool, resources: list[ResourceInfo] = None) -> str:
-    """Build system prompt based on available tools and resources."""
+def build_system_prompt(
+    has_documents: bool,
+    has_web_search: bool,
+    resources: list[ResourceInfo] = None,
+    system_instructions: str = None
+) -> str:
+    """Build system prompt based on available tools, resources, and user instructions."""
     prompt_parts = [BASE_SYSTEM_PROMPT]
+
+    # Add user-defined workspace instructions (highest priority)
+    if system_instructions and system_instructions.strip():
+        prompt_parts.append(f"\n\n## User Instructions (IMPORTANT - follow these for this workspace)\n{system_instructions.strip()}")
 
     # Add tools section
     tools_desc = []
@@ -251,7 +336,8 @@ class Agent:
         namespace: str = "",
         top_k: int = 5,
         has_documents: bool = True,
-        resources: list[ResourceInfo] = None
+        resources: list[ResourceInfo] = None,
+        system_instructions: str = None
     ) -> AgentResponse:
         """Have a conversation turn with the agent."""
         messages = list(conversation_history or [])
@@ -263,7 +349,7 @@ class Agent:
         # Build tools and prompt based on what's available
         has_web_search = bool(self.tavily_api_key)
         tools = build_tools(has_documents, has_web_search)
-        system_prompt = build_system_prompt(has_documents, has_web_search, resources)
+        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions)
 
         # Agentic loop - let Claude decide what to do
         while True:
@@ -328,7 +414,8 @@ class Agent:
         top_k: int = 5,
         has_documents: bool = True,
         resources: list[ResourceInfo] = None,
-        enable_thinking: bool = True
+        enable_thinking: bool = True,
+        system_instructions: str = None
     ) -> Iterator[AgentEvent]:
         """Stream a conversation turn with events for UI updates.
 
@@ -342,14 +429,21 @@ class Agent:
         # Build tools and prompt based on what's available
         has_web_search = bool(self.tavily_api_key)
         tools = build_tools(has_documents, has_web_search)
-        system_prompt = build_system_prompt(has_documents, has_web_search, resources)
+        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions)
 
-        # Build thinking config if enabled
+        # Analyze query complexity to determine thinking configuration
+        complexity = analyze_query_complexity(
+            message,
+            base_budget=self.thinking_budget,
+            deep_budget=self.thinking_budget * 2  # Double budget for "think deeper" requests
+        )
+
+        # Build thinking config based on complexity analysis
         thinking_config = None
-        if enable_thinking and self.thinking_budget > 0:
+        if enable_thinking and complexity.enabled and complexity.budget_tokens > 0:
             thinking_config = {
                 "type": "enabled",
-                "budget_tokens": self.thinking_budget
+                "budget_tokens": complexity.budget_tokens
             }
 
         # Agentic loop

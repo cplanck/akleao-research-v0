@@ -35,6 +35,7 @@ class Workspace(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     name = Column(String, nullable=False)
+    system_instructions = Column(Text, nullable=True)  # Custom instructions for the AI
     created_at = Column(DateTime, default=datetime.utcnow)
 
     resources = relationship("Resource", back_populates="workspace", cascade="all, delete-orphan")

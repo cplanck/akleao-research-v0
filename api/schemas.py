@@ -10,9 +10,15 @@ class WorkspaceCreate(BaseModel):
     name: str
 
 
+class WorkspaceUpdate(BaseModel):
+    name: str | None = None
+    system_instructions: str | None = None
+
+
 class WorkspaceResponse(BaseModel):
     id: str
     name: str
+    system_instructions: str | None = None
     created_at: datetime
     resource_count: int = 0
 

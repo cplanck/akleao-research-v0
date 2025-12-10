@@ -83,7 +83,8 @@ def query_workspace(
         namespace=workspace_id,
         top_k=request.top_k,
         has_documents=has_documents,
-        resources=resources
+        resources=resources,
+        system_instructions=workspace.system_instructions
     )
 
     # Deduplicate sources by file
@@ -149,6 +150,7 @@ def query_workspace_stream(
                 top_k=request.top_k,
                 has_documents=has_documents,
                 resources=resources,
+                system_instructions=workspace.system_instructions,
             ):
                 event_q.put(event)
         except Exception as e:
