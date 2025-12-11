@@ -19,6 +19,15 @@ class Chunk:
         self.id = f"{self.doc_id}_{self.chunk_index}"
 
 
+# Code file extensions that benefit from line-aware chunking
+CODE_EXTENSIONS = {
+    'python', 'javascript', 'typescript', 'go', 'rust', 'java', 'kotlin',
+    'scala', 'ruby', 'php', 'c', 'cpp', 'csharp', 'swift', 'objective-c',
+    'shell', 'powershell', 'r', 'julia', 'lua', 'perl', 'elixir', 'erlang',
+    'haskell', 'clojure', 'vue', 'svelte', 'jsx', 'tsx'
+}
+
+
 class Chunker:
     """Splits documents into chunks with configurable overlap."""
 
@@ -39,6 +48,10 @@ class Chunker:
         # If document has segments with page info, use segment-aware chunking
         if document.segments:
             return self._chunk_with_segments(document)
+
+        # For repository code files, use line-aware chunking
+        if document.metadata.get('repository') and document.doc_type in CODE_EXTENSIONS:
+            return self._chunk_code_with_lines(document)
 
         # Otherwise, fall back to simple text chunking
         return self._chunk_text(document)
@@ -180,6 +193,80 @@ class Chunker:
             # Avoid infinite loop on small remaining text
             if start >= len(text) - self.chunk_overlap:
                 break
+
+        return chunks
+
+    def _chunk_code_with_lines(self, document: Document) -> list[Chunk]:
+        """Line-aware chunking for code files - tracks start/end line numbers.
+
+        For repository code files, we chunk by lines to enable precise GitHub links.
+        """
+        lines = document.content.split('\n')
+        chunks = []
+        current_lines = []
+        current_char_count = 0
+        start_line = 1  # 1-indexed for GitHub links
+
+        for i, line in enumerate(lines):
+            line_num = i + 1  # 1-indexed
+            line_with_newline = line + '\n'
+            line_len = len(line_with_newline)
+
+            # Would adding this line exceed chunk size?
+            if current_char_count + line_len > self.chunk_size and current_lines:
+                # Save current chunk
+                chunk_text = '\n'.join(current_lines)
+                end_line = start_line + len(current_lines) - 1
+
+                chunks.append(Chunk(
+                    content=chunk_text,
+                    source=document.source,
+                    doc_id=document.id,
+                    chunk_index=len(chunks),
+                    metadata={
+                        **document.metadata,
+                        "doc_type": document.doc_type,
+                        "char_count": len(chunk_text),
+                        "line_start": start_line,
+                        "line_end": end_line,
+                    }
+                ))
+
+                # Calculate overlap in lines (roughly chunk_overlap chars worth)
+                overlap_lines = max(1, self.chunk_overlap // 80)  # ~80 chars per line
+                if len(current_lines) > overlap_lines:
+                    # Keep last N lines as overlap
+                    current_lines = current_lines[-overlap_lines:]
+                    start_line = end_line - overlap_lines + 1
+                    current_char_count = sum(len(l) + 1 for l in current_lines)
+                else:
+                    # Reset completely
+                    current_lines = []
+                    start_line = line_num
+                    current_char_count = 0
+
+            # Add line to current chunk
+            current_lines.append(line)
+            current_char_count += line_len
+
+        # Don't forget the last chunk
+        if current_lines:
+            chunk_text = '\n'.join(current_lines)
+            end_line = start_line + len(current_lines) - 1
+
+            chunks.append(Chunk(
+                content=chunk_text,
+                source=document.source,
+                doc_id=document.id,
+                chunk_index=len(chunks),
+                metadata={
+                    **document.metadata,
+                    "doc_type": document.doc_type,
+                    "char_count": len(chunk_text),
+                    "line_start": start_line,
+                    "line_end": end_line,
+                }
+            ))
 
         return chunks
 

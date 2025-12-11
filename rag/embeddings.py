@@ -1,7 +1,8 @@
 """Embedding module - converts text to vectors using OpenAI."""
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from .chunker import Chunk
 
 
@@ -35,15 +36,33 @@ class Embedder:
         )
         return response.data[0].embedding
 
-    def _embed_batch(self, batch: list[str], batch_index: int) -> tuple[int, list[list[float]]]:
-        """Embed a single batch and return with its index for ordering."""
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=batch
-        )
-        # Sort by index to maintain order within batch
-        sorted_data = sorted(response.data, key=lambda x: x.index)
-        return batch_index, [d.embedding for d in sorted_data]
+    def _embed_batch(
+        self,
+        batch: list[str],
+        batch_index: int,
+        max_retries: int = 5,
+        base_delay: float = 1.0
+    ) -> tuple[int, list[list[float]]]:
+        """Embed a single batch and return with its index for ordering.
+
+        Includes exponential backoff retry logic for rate limit errors.
+        """
+        for attempt in range(max_retries):
+            try:
+                response = self.client.embeddings.create(
+                    model=self.model,
+                    input=batch
+                )
+                # Sort by index to maintain order within batch
+                sorted_data = sorted(response.data, key=lambda x: x.index)
+                return batch_index, [d.embedding for d in sorted_data]
+            except RateLimitError as e:
+                if attempt == max_retries - 1:
+                    raise  # Re-raise on final attempt
+                # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                delay = base_delay * (2 ** attempt)
+                print(f"[Embedder] Rate limited, waiting {delay:.1f}s before retry ({attempt + 1}/{max_retries})")
+                time.sleep(delay)
 
     def embed_texts(self, texts: list[str], parallel: bool = True) -> list[list[float]]:
         """Generate embeddings for multiple texts (batched).

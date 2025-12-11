@@ -6,6 +6,7 @@ from typing import Iterator
 import hashlib
 import tempfile
 import requests
+import os
 from urllib.parse import urlparse
 
 
@@ -210,11 +211,13 @@ class DocumentLoader:
             raise ValueError(f"Invalid URL scheme: {parsed.scheme}")
 
         # Download the content with browser-like headers
+        # Note: Don't set Accept-Encoding manually - requests handles gzip/deflate
+        # automatically. Setting 'br' (Brotli) causes issues since requests doesn't
+        # natively support it, leading to garbled content.
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,application/pdf,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
         }
         response = requests.get(url, timeout=60, headers=headers)
@@ -360,3 +363,214 @@ class DocumentLoader:
             doc_type="webpage",
             metadata={"url": source, "title": title}
         )
+
+    def load_git_repository(
+        self,
+        repo_path: str,
+        repo_url: str | None = None,
+        commit_hash: str | None = None
+    ) -> list[Document]:
+        """Load all indexable text files from a cloned git repository.
+
+        Args:
+            repo_path: Path to the cloned repository root
+            repo_url: Original repository URL (for generating GitHub links)
+            commit_hash: Commit hash at time of cloning (for GitHub links)
+
+        Returns:
+            List of Document objects for each text file found
+        """
+        documents = []
+
+        # Convert git clone URL to browse URL for GitHub links
+        github_base_url = None
+        if repo_url:
+            github_base_url = self._git_url_to_browse_url(repo_url, commit_hash)
+
+        # Binary file extensions to skip
+        BINARY_EXTENSIONS = {
+            '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.webp', '.bmp', '.tiff',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.zip', '.tar', '.gz', '.rar', '.7z', '.bz2', '.xz',
+            '.exe', '.dll', '.so', '.dylib', '.a', '.lib',
+            '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.flv', '.wmv',
+            '.ttf', '.otf', '.woff', '.woff2', '.eot',
+            '.pyc', '.pyo', '.class', '.o', '.obj',
+            '.db', '.sqlite', '.sqlite3',
+            '.lock', '.bin', '.dat', '.pack', '.idx',
+            '.jar', '.war', '.ear',
+            '.min.js', '.min.css',  # Minified files
+        }
+
+        # Directories to skip
+        SKIP_DIRS = {
+            '.git', 'node_modules', '__pycache__', '.venv', 'venv', 'env',
+            'dist', 'build', '.next', '.cache', 'coverage', '.nyc_output',
+            '.idea', '.vscode', '.DS_Store', '.pytest_cache', '.mypy_cache',
+            'vendor', 'target', 'out', 'bin', 'obj',
+            '.eggs', '*.egg-info', '.tox', '.nox',
+        }
+
+        for root, dirs, files in os.walk(repo_path):
+            # Skip ignored directories (modify in-place to prevent descent)
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
+
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                ext = os.path.splitext(filename)[1].lower()
+
+                # Skip binary files
+                if ext in BINARY_EXTENSIONS:
+                    continue
+
+                # Skip hidden files
+                if filename.startswith('.'):
+                    continue
+
+                # Skip very large files (> 1MB)
+                try:
+                    if os.path.getsize(file_path) > 1_000_000:
+                        continue
+                except OSError:
+                    continue
+
+                try:
+                    # Try to read as text
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    # Skip empty files
+                    if not content.strip():
+                        continue
+
+                    # Get relative path from repo root
+                    rel_path = os.path.relpath(file_path, repo_path)
+
+                    metadata = {
+                        'filename': filename,
+                        'file_path': rel_path,
+                        'repository': True,
+                    }
+                    # Add GitHub URL info if available
+                    if github_base_url:
+                        metadata['github_base_url'] = github_base_url
+
+                    documents.append(Document(
+                        content=content,
+                        source=rel_path,  # Use relative path as source
+                        doc_type=self._detect_doc_type_from_ext(ext, filename),
+                        metadata=metadata
+                    ))
+                except (UnicodeDecodeError, IOError):
+                    # Skip files that can't be read as text
+                    continue
+
+        return documents
+
+    def _detect_doc_type_from_ext(self, ext: str, filename: str) -> str:
+        """Detect document type based on file extension."""
+        ext_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.tsx': 'typescript',
+            '.jsx': 'javascript',
+            '.md': 'markdown',
+            '.markdown': 'markdown',
+            '.rst': 'restructuredtext',
+            '.txt': 'text',
+            '.json': 'json',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.toml': 'toml',
+            '.xml': 'xml',
+            '.html': 'html',
+            '.css': 'css',
+            '.scss': 'scss',
+            '.sass': 'sass',
+            '.less': 'less',
+            '.go': 'go',
+            '.rs': 'rust',
+            '.java': 'java',
+            '.kt': 'kotlin',
+            '.scala': 'scala',
+            '.rb': 'ruby',
+            '.php': 'php',
+            '.c': 'c',
+            '.cpp': 'cpp',
+            '.h': 'c',
+            '.hpp': 'cpp',
+            '.cs': 'csharp',
+            '.swift': 'swift',
+            '.m': 'objective-c',
+            '.sql': 'sql',
+            '.sh': 'shell',
+            '.bash': 'shell',
+            '.zsh': 'shell',
+            '.ps1': 'powershell',
+            '.dockerfile': 'dockerfile',
+            '.r': 'r',
+            '.jl': 'julia',
+            '.lua': 'lua',
+            '.pl': 'perl',
+            '.ex': 'elixir',
+            '.exs': 'elixir',
+            '.erl': 'erlang',
+            '.hs': 'haskell',
+            '.clj': 'clojure',
+            '.vue': 'vue',
+            '.svelte': 'svelte',
+        }
+
+        # Special filenames
+        name_lower = filename.lower()
+        if name_lower == 'dockerfile':
+            return 'dockerfile'
+        if name_lower == 'makefile':
+            return 'makefile'
+        if name_lower in ('readme', 'readme.md', 'readme.txt'):
+            return 'markdown' if ext in ('.md', '.markdown') else 'text'
+
+        return ext_map.get(ext, 'text')
+
+    def _git_url_to_browse_url(self, git_url: str, commit_hash: str | None = None) -> str | None:
+        """Convert a git clone URL to a browse URL for viewing files.
+
+        Examples:
+            https://github.com/user/repo.git -> https://github.com/user/repo/blob/{commit}/
+            https://github.com/user/repo     -> https://github.com/user/repo/blob/{commit}/
+            git@github.com:user/repo.git     -> https://github.com/user/repo/blob/{commit}/
+
+        Returns:
+            Base URL for file browsing (file path and line numbers added later), or None if unsupported
+        """
+        import re
+
+        # Strip trailing .git if present
+        url = git_url.rstrip('/').removesuffix('.git')
+
+        # Handle SSH URLs (git@github.com:user/repo)
+        ssh_match = re.match(r'^git@([^:]+):(.+)$', url)
+        if ssh_match:
+            host = ssh_match.group(1)
+            path = ssh_match.group(2)
+            url = f'https://{host}/{path}'
+
+        # Parse the URL to get host and path
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.rstrip('/')
+
+        # Determine the ref to use (commit hash or main)
+        ref = commit_hash or 'HEAD'
+
+        # GitHub, GitLab, Bitbucket all use similar URL patterns
+        if 'github.com' in host:
+            return f'{url}/blob/{ref}'
+        elif 'gitlab.com' in host:
+            return f'{url}/-/blob/{ref}'
+        elif 'bitbucket.org' in host:
+            return f'{url}/src/{ref}'
+
+        # Unsupported host
+        return None

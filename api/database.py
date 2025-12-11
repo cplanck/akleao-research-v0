@@ -1,7 +1,7 @@
 """Database setup and models."""
 
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, DateTime, ForeignKey, Text, Enum
+from sqlalchemy import create_engine, Column, String, DateTime, ForeignKey, Text, Enum, Integer
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 import enum
 import uuid
@@ -20,7 +20,7 @@ def generate_uuid():
 class ResourceType(str, enum.Enum):
     DOCUMENT = "document"
     WEBSITE = "website"
-    # Future: PHOTO = "photo", etc.
+    GIT_REPOSITORY = "git_repository"
 
 
 class ResourceStatus(str, enum.Enum):
@@ -53,7 +53,12 @@ class Resource(Base):
     status = Column(Enum(ResourceStatus), default=ResourceStatus.PENDING)
     error_message = Column(Text, nullable=True)
     metadata_ = Column("metadata", Text, nullable=True)  # JSON string for type-specific info
+    summary = Column(Text, nullable=True)  # LLM-generated summary of the document content
     created_at = Column(DateTime, default=datetime.utcnow)
+    indexed_at = Column(DateTime, nullable=True)  # When indexing completed
+    indexing_duration_ms = Column(Integer, nullable=True)  # Duration in milliseconds
+    file_size_bytes = Column(Integer, nullable=True)  # File size for documents
+    commit_hash = Column(String, nullable=True)  # Git commit SHA for tracking updates
 
     workspace = relationship("Workspace", back_populates="resources")
 

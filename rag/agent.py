@@ -1,5 +1,6 @@
 """Agentic LLM module - conversational assistant with tool use."""
 
+import json
 import os
 import re
 import requests
@@ -27,6 +28,17 @@ class ThinkingConfig:
     enabled: bool
     budget_tokens: int
     reason: str  # Why this config was chosen
+
+
+@dataclass
+class RequestPlan:
+    """Plan for how to handle a user request."""
+    category: str  # "chat", "doc_search", "web_search", "research", "analysis"
+    acknowledgment: str  # What to tell the user we're doing
+    thinking_budget: int  # Token budget for thinking (0 = disabled)
+    search_strategy: str  # "none", "docs", "web", "both"
+    complexity: str  # "simple", "moderate", "complex"
+    needs_tools: bool  # Whether this request needs tool use
 
 
 # Patterns for simple queries that don't need thinking
@@ -166,6 +178,7 @@ class ResourceInfo:
     name: str
     type: str  # "document" or "website"
     status: str  # "ready", "pending", "indexing", "failed"
+    summary: str | None = None  # LLM-generated summary of the document content
 
 
 def build_system_prompt(
@@ -226,10 +239,73 @@ def build_tools(has_documents: bool, has_web_search: bool) -> list:
     return tools
 
 
+# Router prompt for planning requests
+ROUTER_SYSTEM_PROMPT = """You are a request router. Analyze the user's message and decide how to handle it.
+
+You must respond with a JSON object (no other text) with these fields:
+- category: one of "chat", "doc_search", "web_search", "research", "analysis"
+- acknowledgment: A brief, natural sentence telling the user what you're about to do. Be conversational and specific. Reference their actual question/topic. Keep it under 15 words.
+- complexity: one of "simple", "moderate", "complex"
+- search_strategy: one of "none", "docs", "web", "both"
+
+Categories explained:
+- "chat": Simple conversation, greetings, acknowledgments, clarifying questions
+- "doc_search": User wants info from their uploaded documents
+- "web_search": User wants current info from the web
+- "research": User wants thorough research (may need multiple searches)
+- "analysis": User wants deep analysis or comparison of information
+
+IMPORTANT for acknowledgments:
+- Look at the resource filenames/summaries below to judge if the documents might contain what the user is asking about
+- If a filename/summary clearly matches the topic (e.g., "XYZ_datasheet.pdf" for a question about XYZ), be confident: "Searching your XYZ datasheet..."
+- If the query topic doesn't obviously match any filenames, use neutral language: "Searching your workspace for [topic] information..."
+- Never imply the user has documents about a topic unless filenames/summaries suggest it
+
+Acknowledgment examples:
+- Confident (filename matches): "Searching your product datasheet for pinout info..."
+- Neutral (no obvious match): "Searching your workspace for Feather M0 information..."
+- Neutral: "Checking your workspace for authentication details..."
+- Web search: "Let me check the web for the latest on that."
+
+For simple chat (greetings, thanks, etc.), use acknowledgment: "" (empty string).
+
+Workspace resources (filenames are clues about content):
+{resources}
+
+Has documents: {has_documents}
+Has web search: {has_web_search}"""
+
+
+def build_router_prompt(
+    has_documents: bool,
+    has_web_search: bool,
+    resources: list[ResourceInfo] = None
+) -> str:
+    """Build the router system prompt with context."""
+    resource_text = "None"
+    if resources:
+        ready = [r for r in resources if r.status == "ready"]
+        if ready:
+            # Build detailed resource list with summaries
+            resource_parts = []
+            for r in ready:
+                if r.summary:
+                    resource_parts.append(f"- {r.name} ({r.type}): {r.summary}")
+                else:
+                    resource_parts.append(f"- {r.name} ({r.type})")
+            resource_text = "\n".join(resource_parts)
+
+    return ROUTER_SYSTEM_PROMPT.format(
+        resources=resource_text,
+        has_documents=has_documents,
+        has_web_search=has_web_search
+    )
+
+
 @dataclass
 class AgentEvent:
     """Event emitted by the agent during processing."""
-    type: str  # "status", "tool_call", "tool_result", "chunk", "thinking"
+    type: str  # "plan", "status", "tool_call", "tool_result", "chunk", "thinking", "sources", "usage", "done"
     data: dict
 
 
@@ -328,6 +404,108 @@ class Agent:
             truncated = truncated[:last_space]
 
         return truncated.strip() + "..."
+
+    def _format_source_info(self, result: RetrievalResult) -> dict:
+        """Format a retrieval result into a source info dict with GitHub URL if available."""
+        metadata = result.metadata
+
+        # Build base source info
+        source_info = {
+            "content": result.content[:200] + "..." if len(result.content) > 200 else result.content,
+            "source": result.source,
+            "score": result.score,
+            "page_ref": metadata.get("page_ref"),
+            "page_numbers": metadata.get("page_numbers"),
+            "snippet": self._extract_snippet(result.content, 100),
+            "resource_id": metadata.get("resource_id"),
+            "line_start": metadata.get("line_start"),
+            "line_end": metadata.get("line_end"),
+            "github_url": None
+        }
+
+        # Build GitHub URL if we have the necessary metadata
+        github_base_url = metadata.get("github_base_url")
+        file_path = metadata.get("file_path")
+        line_start = metadata.get("line_start")
+        line_end = metadata.get("line_end")
+
+        if github_base_url and file_path:
+            # Construct URL: base/file_path#L{start}-L{end}
+            github_url = f"{github_base_url}/{file_path}"
+            if line_start and line_end:
+                github_url += f"#L{line_start}-L{line_end}"
+            elif line_start:
+                github_url += f"#L{line_start}"
+            source_info["github_url"] = github_url
+
+        return source_info
+
+    def plan_request(
+        self,
+        message: str,
+        has_documents: bool = True,
+        has_web_search: bool = False,
+        resources: list[ResourceInfo] = None,
+        router_model: str = "claude-3-haiku-20240307"
+    ) -> RequestPlan:
+        """Use a fast model to plan how to handle the request.
+
+        Returns a RequestPlan with categorization, acknowledgment, and strategy.
+        """
+        router_prompt = build_router_prompt(has_documents, has_web_search, resources)
+
+        try:
+            response = self.client.messages.create(
+                model=router_model,
+                max_tokens=256,
+                system=router_prompt,
+                messages=[{"role": "user", "content": message}]
+            )
+
+            # Parse the JSON response
+            response_text = response.content[0].text.strip()
+            # Handle potential markdown code blocks
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+
+            plan_data = json.loads(response_text)
+
+            # Determine thinking budget based on complexity
+            complexity = plan_data.get("complexity", "moderate")
+            if complexity == "simple":
+                thinking_budget = 0
+            elif complexity == "complex":
+                thinking_budget = self.thinking_budget * 2
+            else:
+                thinking_budget = self.thinking_budget
+
+            # Determine if tools are needed
+            search_strategy = plan_data.get("search_strategy", "none")
+            needs_tools = search_strategy != "none"
+
+            return RequestPlan(
+                category=plan_data.get("category", "chat"),
+                acknowledgment=plan_data.get("acknowledgment", ""),
+                thinking_budget=thinking_budget,
+                search_strategy=search_strategy,
+                complexity=complexity,
+                needs_tools=needs_tools
+            )
+
+        except Exception as e:
+            # Fallback plan if API call or parsing fails
+            print(f"[Router] Error: {e}")
+            return RequestPlan(
+                category="chat",
+                acknowledgment="Let me help you with that.",
+                thinking_budget=self.thinking_budget,
+                search_strategy="docs" if has_documents else "none",
+                complexity="moderate",
+                needs_tools=has_documents
+            )
 
     def chat(
         self,
@@ -431,20 +609,34 @@ class Agent:
         tools = build_tools(has_documents, has_web_search)
         system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions)
 
-        # Analyze query complexity to determine thinking configuration
-        complexity = analyze_query_complexity(
-            message,
-            base_budget=self.thinking_budget,
-            deep_budget=self.thinking_budget * 2  # Double budget for "think deeper" requests
+        # Step 1: Plan the request using the router
+        plan = self.plan_request(
+            message=message,
+            has_documents=has_documents,
+            has_web_search=has_web_search,
+            resources=resources
         )
+        print(f"[Router] Plan: category={plan.category}, acknowledgment='{plan.acknowledgment}', complexity={plan.complexity}")
 
-        # Build thinking config based on complexity analysis
+        # Emit the plan event with acknowledgment
+        yield AgentEvent("plan", {
+            "category": plan.category,
+            "acknowledgment": plan.acknowledgment,
+            "complexity": plan.complexity,
+            "search_strategy": plan.search_strategy
+        })
+
+        # Build thinking config based on the plan's complexity
         thinking_config = None
-        if enable_thinking and complexity.enabled and complexity.budget_tokens > 0:
+        if enable_thinking and plan.thinking_budget > 0:
             thinking_config = {
                 "type": "enabled",
-                "budget_tokens": complexity.budget_tokens
+                "budget_tokens": plan.thinking_budget
             }
+
+        # Token usage tracking across the agentic loop
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         # Agentic loop
         while True:
@@ -515,6 +707,11 @@ class Agent:
                 final_response = stream.get_final_message()
                 response_content = final_response.content
 
+                # Accumulate token usage
+                if hasattr(final_response, 'usage') and final_response.usage:
+                    total_input_tokens += final_response.usage.input_tokens
+                    total_output_tokens += final_response.usage.output_tokens
+
             if stop_reason == "tool_use":
                 # Process tool calls
                 tool_results = []
@@ -544,7 +741,8 @@ class Agent:
                             # Emit tool result event
                             yield AgentEvent("tool_result", {
                                 "tool": "search_documents",
-                                "found": len(results)
+                                "found": len(results),
+                                "query": query
                             })
 
                             tool_results.append({
@@ -569,7 +767,8 @@ class Agent:
                             # Emit tool result event
                             yield AgentEvent("tool_result", {
                                 "tool": "search_web",
-                                "found": result_count
+                                "found": result_count,
+                                "query": query
                             })
 
                             tool_results.append({
@@ -582,15 +781,7 @@ class Agent:
                 if all_sources:
                     yield AgentEvent("sources", {
                         "sources": [
-                            {
-                                "content": r.content[:200] + "..." if len(r.content) > 200 else r.content,
-                                "source": r.source,
-                                "score": r.score,
-                                "page_ref": r.metadata.get("page_ref"),
-                                "page_numbers": r.metadata.get("page_numbers"),
-                                "snippet": self._extract_snippet(r.content, 100),
-                                "resource_id": r.metadata.get("resource_id")
-                            }
+                            self._format_source_info(r)
                             for r in all_sources
                         ]
                     })
@@ -607,6 +798,13 @@ class Agent:
 
                 # Signal responding status (already streamed above)
                 yield AgentEvent("status", {"status": "responding"})
+
+                # Emit token usage
+                yield AgentEvent("usage", {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "total_tokens": total_input_tokens + total_output_tokens
+                })
 
                 yield AgentEvent("done", {})
                 return

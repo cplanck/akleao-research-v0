@@ -45,7 +45,8 @@ def _build_resources_list(workspace) -> list[ResourceInfo]:
         ResourceInfo(
             name=r.filename or r.source,
             type=r.type.value,  # "document" or "website"
-            status=r.status.value  # "ready", "pending", "indexing", "failed"
+            status=r.status.value,  # "ready", "pending", "indexing", "failed"
+            summary=r.summary  # LLM-generated summary (may be None)
         )
         for r in workspace.resources
     ]
@@ -168,14 +169,17 @@ def query_workspace_stream(
             try:
                 event = event_q.get(timeout=0.1)
 
-                if event.type == "status":
+                if event.type == "plan":
+                    yield f"data: {json.dumps({'type': 'plan', 'category': event.data['category'], 'acknowledgment': event.data['acknowledgment'], 'complexity': event.data['complexity'], 'search_strategy': event.data['search_strategy']})}\n\n"
+
+                elif event.type == "status":
                     yield f"data: {json.dumps({'type': 'status', 'status': event.data['status']})}\n\n"
 
                 elif event.type == "tool_call":
                     yield f"data: {json.dumps({'type': 'tool_call', 'tool': event.data['tool'], 'query': event.data.get('query', '')})}\n\n"
 
                 elif event.type == "tool_result":
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': event.data['tool'], 'found': event.data['found']})}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': event.data['tool'], 'found': event.data['found'], 'query': event.data.get('query', '')})}\n\n"
 
                 elif event.type == "sources":
                     # Deduplicate sources by file
@@ -191,6 +195,9 @@ def query_workspace_stream(
 
                 elif event.type == "chunk":
                     yield f"data: {json.dumps({'type': 'chunk', 'content': event.data['content']})}\n\n"
+
+                elif event.type == "usage":
+                    yield f"data: {json.dumps({'type': 'usage', 'input_tokens': event.data['input_tokens'], 'output_tokens': event.data['output_tokens'], 'total_tokens': event.data['total_tokens']})}\n\n"
 
                 elif event.type == "done":
                     if not sources_sent:

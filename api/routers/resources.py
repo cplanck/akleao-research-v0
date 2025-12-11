@@ -2,19 +2,23 @@
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db, Workspace, Resource, ResourceType, ResourceStatus
-from api.schemas import ResourceResponse, UrlResourceCreate
+from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate
 from rag import RAGPipeline
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/resources", tags=["resources"])
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+GIT_CLONE_DIR = Path("repos")
+GIT_CLONE_DIR.mkdir(exist_ok=True)
 
 
 def get_pipeline():
@@ -27,6 +31,8 @@ def get_pipeline():
 def index_document(resource_id: str, file_path: str, workspace_id: str):
     """Background task to index a document."""
     from api.database import SessionLocal
+    from datetime import datetime
+    import time
 
     db = SessionLocal()
     try:
@@ -37,12 +43,26 @@ def index_document(resource_id: str, file_path: str, workspace_id: str):
         resource.status = ResourceStatus.INDEXING
         db.commit()
 
+        start_time = time.time()
         try:
             pipeline = get_pipeline()
             # Use workspace_id as Pinecone namespace, pass resource_id for source linking
-            pipeline.ingest(file_path, namespace=workspace_id, resource_id=resource_id)
+            # Enable summary generation
+            result = pipeline.ingest(
+                file_path,
+                namespace=workspace_id,
+                resource_id=resource_id,
+                generate_summary=True
+            )
 
+            # Calculate duration and record timing
+            duration_ms = int((time.time() - start_time) * 1000)
             resource.status = ResourceStatus.READY
+            resource.indexed_at = datetime.utcnow()
+            resource.indexing_duration_ms = duration_ms
+            # Save the generated summary
+            if result.get("summary"):
+                resource.summary = result["summary"]
             db.commit()
         except Exception as e:
             resource.status = ResourceStatus.FAILED
@@ -82,13 +102,17 @@ async def add_resource(
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
+    # Get file size
+    file_size = file_path.stat().st_size
+
     # Create resource record
     resource = Resource(
         workspace_id=workspace_id,
         type=ResourceType.DOCUMENT,
         source=str(file_path),
         filename=file.filename,
-        status=ResourceStatus.PENDING
+        status=ResourceStatus.PENDING,
+        file_size_bytes=file_size
     )
     db.add(resource)
     db.commit()
@@ -103,6 +127,54 @@ async def add_resource(
 def index_url(resource_id: str, url: str, workspace_id: str):
     """Background task to index a URL resource."""
     from api.database import SessionLocal
+    from datetime import datetime
+    import traceback
+    import time
+
+    db = SessionLocal()
+    try:
+        resource = db.query(Resource).filter(Resource.id == resource_id).first()
+        if not resource:
+            return
+
+        resource.status = ResourceStatus.INDEXING
+        db.commit()
+
+        start_time = time.time()
+        try:
+            pipeline = get_pipeline()
+            # Enable summary generation
+            result = pipeline.ingest_url(
+                url,
+                namespace=workspace_id,
+                resource_id=resource_id,
+                generate_summary=True
+            )
+
+            # Calculate duration and record timing
+            duration_ms = int((time.time() - start_time) * 1000)
+            resource.status = ResourceStatus.READY
+            resource.indexed_at = datetime.utcnow()
+            resource.indexing_duration_ms = duration_ms
+            # Save the generated summary
+            if result.get("summary"):
+                resource.summary = result["summary"]
+            db.commit()
+        except Exception as e:
+            print(f"Error indexing URL {url}: {e}")
+            traceback.print_exc()
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = str(e)
+            db.commit()
+    finally:
+        db.close()
+
+
+def index_git_repository(resource_id: str, repo_url: str, branch: str | None, workspace_id: str):
+    """Background task to clone and index a git repository."""
+    from api.database import SessionLocal
+    from datetime import datetime
+    import time
     import traceback
 
     db = SessionLocal()
@@ -114,20 +186,133 @@ def index_url(resource_id: str, url: str, workspace_id: str):
         resource.status = ResourceStatus.INDEXING
         db.commit()
 
-        try:
-            pipeline = get_pipeline()
-            pipeline.ingest_url(url, namespace=workspace_id, resource_id=resource_id)
+        start_time = time.time()
 
+        # Create workspace-specific clone directory
+        clone_dir = GIT_CLONE_DIR / workspace_id / resource_id
+        clone_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Clone the repository (shallow clone for speed)
+            clone_cmd = ["git", "clone", "--depth", "1"]
+            if branch:
+                clone_cmd.extend(["--branch", branch])
+            clone_cmd.extend([repo_url, str(clone_dir)])
+
+            print(f"[Git] Cloning repository: {repo_url}")
+            result = subprocess.run(
+                clone_cmd,
+                check=True,
+                capture_output=True,
+                timeout=300  # 5 minute timeout for clone
+            )
+
+            # Get commit hash
+            hash_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=clone_dir,
+                capture_output=True,
+                text=True
+            )
+            commit_hash = hash_result.stdout.strip()[:12]  # Short hash
+            print(f"[Git] Cloned at commit: {commit_hash}")
+
+            # Load documents from repo with GitHub URL info
+            pipeline = get_pipeline()
+            loader = pipeline.loader
+            documents = loader.load_git_repository(
+                str(clone_dir),
+                repo_url=repo_url,
+                commit_hash=commit_hash
+            )
+            print(f"[Git] Found {len(documents)} indexable files")
+
+            if not documents:
+                resource.status = ResourceStatus.FAILED
+                resource.error_message = "No indexable files found in repository"
+                db.commit()
+                return
+
+            # Ingest all documents
+            ingest_result = pipeline.ingest_documents(
+                documents,
+                namespace=workspace_id,
+                resource_id=resource_id,
+                generate_summary=True
+            )
+
+            # Update resource
+            duration_ms = int((time.time() - start_time) * 1000)
             resource.status = ResourceStatus.READY
+            resource.indexed_at = datetime.utcnow()
+            resource.indexing_duration_ms = duration_ms
+            resource.commit_hash = commit_hash
+            if ingest_result.get("summary"):
+                resource.summary = ingest_result["summary"]
+            db.commit()
+            print(f"[Git] Indexing complete: {ingest_result['documents']} files, {ingest_result['chunks']} chunks")
+
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            print(f"[Git] Clone failed: {error_msg}")
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = f"Git clone failed: {error_msg}"
+            db.commit()
+        except subprocess.TimeoutExpired:
+            print(f"[Git] Clone timed out for {repo_url}")
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = "Git clone timed out (5 minute limit)"
             db.commit()
         except Exception as e:
-            print(f"Error indexing URL {url}: {e}")
+            print(f"[Git] Error indexing repository: {e}")
             traceback.print_exc()
             resource.status = ResourceStatus.FAILED
             resource.error_message = str(e)
             db.commit()
+        finally:
+            # Clean up cloned repo to save disk space
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir, ignore_errors=True)
+                print(f"[Git] Cleaned up clone directory")
     finally:
         db.close()
+
+
+@router.post("/git", response_model=ResourceResponse)
+async def add_git_resource(
+    workspace_id: str,
+    request: GitRepoResourceCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Add and index a git repository."""
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # Extract repo name for filename
+    repo_name = request.url.rstrip('/').rstrip('.git').split('/')[-1]
+
+    resource = Resource(
+        workspace_id=workspace_id,
+        type=ResourceType.GIT_REPOSITORY,
+        source=request.url,
+        filename=repo_name,
+        status=ResourceStatus.PENDING
+    )
+    db.add(resource)
+    db.commit()
+    db.refresh(resource)
+
+    background_tasks.add_task(
+        index_git_repository,
+        resource.id,
+        request.url,
+        request.branch,
+        workspace_id
+    )
+
+    return resource
 
 
 @router.post("/url", response_model=ResourceResponse)
@@ -231,3 +416,56 @@ def delete_resource(workspace_id: str, resource_id: str, db: Session = Depends(g
     db.delete(resource)
     db.commit()
     return {"status": "deleted", "id": resource_id}
+
+
+@router.post("/{resource_id}/reindex", response_model=ResourceResponse)
+async def reindex_resource(
+    workspace_id: str,
+    resource_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Reindex a resource."""
+    resource = db.query(Resource).filter(
+        Resource.id == resource_id,
+        Resource.workspace_id == workspace_id
+    ).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    # Reset status and clear previous indexing stats
+    resource.status = ResourceStatus.PENDING
+    resource.indexed_at = None
+    resource.indexing_duration_ms = None
+    resource.error_message = None
+    resource.summary = None
+    db.commit()
+    db.refresh(resource)
+
+    # Queue reindexing based on resource type
+    if resource.type == ResourceType.DOCUMENT:
+        # For documents, use the stored file path
+        if not resource.source or not os.path.exists(resource.source):
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = "Source file not found"
+            db.commit()
+            db.refresh(resource)
+            raise HTTPException(status_code=400, detail="Source file not found for reindexing")
+        background_tasks.add_task(index_document, resource.id, resource.source, workspace_id)
+    elif resource.type == ResourceType.WEBSITE:
+        # For websites, re-fetch from the URL
+        background_tasks.add_task(index_url, resource.id, resource.source, workspace_id)
+    elif resource.type == ResourceType.GIT_REPOSITORY:
+        # For git repos, re-clone and re-index (use default branch on reindex)
+        resource.commit_hash = None  # Clear old commit hash
+        db.commit()
+        db.refresh(resource)
+        background_tasks.add_task(
+            index_git_repository,
+            resource.id,
+            resource.source,  # URL
+            None,  # Use default branch on reindex
+            workspace_id
+        )
+
+    return resource
