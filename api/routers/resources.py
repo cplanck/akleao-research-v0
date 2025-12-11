@@ -8,11 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Backgro
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from api.database import get_db, Workspace, Resource, ResourceType, ResourceStatus
+from api.database import get_db, Project, Resource, ResourceType, ResourceStatus
 from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate
 from rag import RAGPipeline
 
-router = APIRouter(prefix="/workspaces/{workspace_id}/resources", tags=["resources"])
+router = APIRouter(prefix="/projects/{project_id}/resources", tags=["resources"])
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -28,7 +28,7 @@ def get_pipeline():
     return pipeline
 
 
-def index_document(resource_id: str, file_path: str, workspace_id: str):
+def index_document(resource_id: str, file_path: str, project_id: str):
     """Background task to index a document."""
     from api.database import SessionLocal
     from datetime import datetime
@@ -46,11 +46,11 @@ def index_document(resource_id: str, file_path: str, workspace_id: str):
         start_time = time.time()
         try:
             pipeline = get_pipeline()
-            # Use workspace_id as Pinecone namespace, pass resource_id for source linking
+            # Use project_id as Pinecone namespace, pass resource_id for source linking
             # Enable summary generation
             result = pipeline.ingest(
                 file_path,
-                namespace=workspace_id,
+                namespace=project_id,
                 resource_id=resource_id,
                 generate_summary=True
             )
@@ -60,6 +60,7 @@ def index_document(resource_id: str, file_path: str, workspace_id: str):
             resource.status = ResourceStatus.READY
             resource.indexed_at = datetime.utcnow()
             resource.indexing_duration_ms = duration_ms
+            resource.pinecone_namespace = project_id  # Track which namespace vectors are stored in
             # Save the generated summary
             if result.get("summary"):
                 resource.summary = result["summary"]
@@ -74,16 +75,16 @@ def index_document(resource_id: str, file_path: str, workspace_id: str):
 
 @router.post("", response_model=ResourceResponse)
 async def add_resource(
-    workspace_id: str,
+    project_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
     """Upload and index a document resource."""
-    # Verify workspace exists
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     # Validate file type
     allowed_extensions = {".pdf", ".docx", ".md", ".txt", ".markdown"}
@@ -95,10 +96,10 @@ async def add_resource(
         )
 
     # Save uploaded file
-    workspace_upload_dir = UPLOAD_DIR / workspace_id
-    workspace_upload_dir.mkdir(exist_ok=True)
+    project_upload_dir = UPLOAD_DIR / project_id
+    project_upload_dir.mkdir(exist_ok=True)
 
-    file_path = workspace_upload_dir / file.filename
+    file_path = project_upload_dir / file.filename
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -107,7 +108,7 @@ async def add_resource(
 
     # Create resource record
     resource = Resource(
-        workspace_id=workspace_id,
+        project_id=project_id,
         type=ResourceType.DOCUMENT,
         source=str(file_path),
         filename=file.filename,
@@ -119,12 +120,12 @@ async def add_resource(
     db.refresh(resource)
 
     # Index in background
-    background_tasks.add_task(index_document, resource.id, str(file_path), workspace_id)
+    background_tasks.add_task(index_document, resource.id, str(file_path), project_id)
 
     return resource
 
 
-def index_url(resource_id: str, url: str, workspace_id: str):
+def index_url(resource_id: str, url: str, project_id: str):
     """Background task to index a URL resource."""
     from api.database import SessionLocal
     from datetime import datetime
@@ -146,7 +147,7 @@ def index_url(resource_id: str, url: str, workspace_id: str):
             # Enable summary generation
             result = pipeline.ingest_url(
                 url,
-                namespace=workspace_id,
+                namespace=project_id,
                 resource_id=resource_id,
                 generate_summary=True
             )
@@ -156,6 +157,7 @@ def index_url(resource_id: str, url: str, workspace_id: str):
             resource.status = ResourceStatus.READY
             resource.indexed_at = datetime.utcnow()
             resource.indexing_duration_ms = duration_ms
+            resource.pinecone_namespace = project_id  # Track which namespace vectors are stored in
             # Save the generated summary
             if result.get("summary"):
                 resource.summary = result["summary"]
@@ -170,7 +172,7 @@ def index_url(resource_id: str, url: str, workspace_id: str):
         db.close()
 
 
-def index_git_repository(resource_id: str, repo_url: str, branch: str | None, workspace_id: str):
+def index_git_repository(resource_id: str, repo_url: str, branch: str | None, project_id: str):
     """Background task to clone and index a git repository."""
     from api.database import SessionLocal
     from datetime import datetime
@@ -188,8 +190,8 @@ def index_git_repository(resource_id: str, repo_url: str, branch: str | None, wo
 
         start_time = time.time()
 
-        # Create workspace-specific clone directory
-        clone_dir = GIT_CLONE_DIR / workspace_id / resource_id
+        # Create project-specific clone directory
+        clone_dir = GIT_CLONE_DIR / project_id / resource_id
         clone_dir.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -236,7 +238,7 @@ def index_git_repository(resource_id: str, repo_url: str, branch: str | None, wo
             # Ingest all documents
             ingest_result = pipeline.ingest_documents(
                 documents,
-                namespace=workspace_id,
+                namespace=project_id,
                 resource_id=resource_id,
                 generate_summary=True
             )
@@ -247,6 +249,7 @@ def index_git_repository(resource_id: str, repo_url: str, branch: str | None, wo
             resource.indexed_at = datetime.utcnow()
             resource.indexing_duration_ms = duration_ms
             resource.commit_hash = commit_hash
+            resource.pinecone_namespace = project_id  # Track which namespace vectors are stored in
             if ingest_result.get("summary"):
                 resource.summary = ingest_result["summary"]
             db.commit()
@@ -280,21 +283,21 @@ def index_git_repository(resource_id: str, repo_url: str, branch: str | None, wo
 
 @router.post("/git", response_model=ResourceResponse)
 async def add_git_resource(
-    workspace_id: str,
+    project_id: str,
     request: GitRepoResourceCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """Add and index a git repository."""
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     # Extract repo name for filename
     repo_name = request.url.rstrip('/').rstrip('.git').split('/')[-1]
 
     resource = Resource(
-        workspace_id=workspace_id,
+        project_id=project_id,
         type=ResourceType.GIT_REPOSITORY,
         source=request.url,
         filename=repo_name,
@@ -309,7 +312,7 @@ async def add_git_resource(
         resource.id,
         request.url,
         request.branch,
-        workspace_id
+        project_id
     )
 
     return resource
@@ -317,7 +320,7 @@ async def add_git_resource(
 
 @router.post("/url", response_model=ResourceResponse)
 async def add_url_resource(
-    workspace_id: str,
+    project_id: str,
     request: UrlResourceCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -325,9 +328,9 @@ async def add_url_resource(
     """Add and index a URL resource (webpage or PDF)."""
     from urllib.parse import urlparse, unquote
 
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     # Extract filename from URL path
     parsed = urlparse(request.url)
@@ -339,7 +342,7 @@ async def add_url_resource(
 
     # Create resource record
     resource = Resource(
-        workspace_id=workspace_id,
+        project_id=project_id,
         type=ResourceType.WEBSITE,
         source=request.url,
         filename=filename,
@@ -350,27 +353,27 @@ async def add_url_resource(
     db.refresh(resource)
 
     # Index in background
-    background_tasks.add_task(index_url, resource.id, request.url, workspace_id)
+    background_tasks.add_task(index_url, resource.id, request.url, project_id)
 
     return resource
 
 
 @router.get("", response_model=list[ResourceResponse])
-def list_resources(workspace_id: str, db: Session = Depends(get_db)):
-    """List all resources in a workspace."""
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+def list_resources(project_id: str, db: Session = Depends(get_db)):
+    """List all resources in a project."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    return workspace.resources
+    return project.resources
 
 
 @router.get("/{resource_id}", response_model=ResourceResponse)
-def get_resource(workspace_id: str, resource_id: str, db: Session = Depends(get_db)):
+def get_resource(project_id: str, resource_id: str, db: Session = Depends(get_db)):
     """Get a specific resource."""
     resource = db.query(Resource).filter(
         Resource.id == resource_id,
-        Resource.workspace_id == workspace_id
+        Resource.project_id == project_id
     ).first()
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -378,11 +381,11 @@ def get_resource(workspace_id: str, resource_id: str, db: Session = Depends(get_
 
 
 @router.get("/{resource_id}/file")
-def get_resource_file(workspace_id: str, resource_id: str, db: Session = Depends(get_db)):
+def get_resource_file(project_id: str, resource_id: str, db: Session = Depends(get_db)):
     """Download/view the resource file."""
     resource = db.query(Resource).filter(
         Resource.id == resource_id,
-        Resource.workspace_id == workspace_id
+        Resource.project_id == project_id
     ).first()
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -398,11 +401,11 @@ def get_resource_file(workspace_id: str, resource_id: str, db: Session = Depends
 
 
 @router.delete("/{resource_id}")
-def delete_resource(workspace_id: str, resource_id: str, db: Session = Depends(get_db)):
+def delete_resource(project_id: str, resource_id: str, db: Session = Depends(get_db)):
     """Delete a resource."""
     resource = db.query(Resource).filter(
         Resource.id == resource_id,
-        Resource.workspace_id == workspace_id
+        Resource.project_id == project_id
     ).first()
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -420,7 +423,7 @@ def delete_resource(workspace_id: str, resource_id: str, db: Session = Depends(g
 
 @router.post("/{resource_id}/reindex", response_model=ResourceResponse)
 async def reindex_resource(
-    workspace_id: str,
+    project_id: str,
     resource_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -428,7 +431,7 @@ async def reindex_resource(
     """Reindex a resource."""
     resource = db.query(Resource).filter(
         Resource.id == resource_id,
-        Resource.workspace_id == workspace_id
+        Resource.project_id == project_id
     ).first()
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -451,10 +454,10 @@ async def reindex_resource(
             db.commit()
             db.refresh(resource)
             raise HTTPException(status_code=400, detail="Source file not found for reindexing")
-        background_tasks.add_task(index_document, resource.id, resource.source, workspace_id)
+        background_tasks.add_task(index_document, resource.id, resource.source, project_id)
     elif resource.type == ResourceType.WEBSITE:
         # For websites, re-fetch from the URL
-        background_tasks.add_task(index_url, resource.id, resource.source, workspace_id)
+        background_tasks.add_task(index_url, resource.id, resource.source, project_id)
     elif resource.type == ResourceType.GIT_REPOSITORY:
         # For git repos, re-clone and re-index (use default branch on reindex)
         resource.commit_hash = None  # Clear old commit hash
@@ -465,7 +468,7 @@ async def reindex_resource(
             resource.id,
             resource.source,  # URL
             None,  # Use default branch on reindex
-            workspace_id
+            project_id
         )
 
     return resource

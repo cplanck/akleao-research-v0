@@ -244,7 +244,7 @@ ROUTER_SYSTEM_PROMPT = """You are a request router. Analyze the user's message a
 
 You must respond with a JSON object (no other text) with these fields:
 - category: one of "chat", "doc_search", "web_search", "research", "analysis"
-- acknowledgment: A brief, natural sentence telling the user what you're about to do. Be conversational and specific. Reference their actual question/topic. Keep it under 15 words.
+- acknowledgment: A brief, natural sentence describing what you're about to do. MUST reference the specific topic from the user's message. Keep it under 15 words.
 - complexity: one of "simple", "moderate", "complex"
 - search_strategy: one of "none", "docs", "web", "both"
 
@@ -255,17 +255,25 @@ Categories explained:
 - "research": User wants thorough research (may need multiple searches)
 - "analysis": User wants deep analysis or comparison of information
 
-IMPORTANT for acknowledgments:
-- Look at the resource filenames/summaries below to judge if the documents might contain what the user is asking about
-- If a filename/summary clearly matches the topic (e.g., "XYZ_datasheet.pdf" for a question about XYZ), be confident: "Searching your XYZ datasheet..."
-- If the query topic doesn't obviously match any filenames, use neutral language: "Searching your workspace for [topic] information..."
-- Never imply the user has documents about a topic unless filenames/summaries suggest it
+CRITICAL - Acknowledgment rules:
+1. ALWAYS include the specific topic/subject from the user's question
+2. NEVER use generic phrases like "Let me help you with that" or "I'll look into that"
+3. Reference what they're actually asking about
 
-Acknowledgment examples:
-- Confident (filename matches): "Searching your product datasheet for pinout info..."
-- Neutral (no obvious match): "Searching your workspace for Feather M0 information..."
-- Neutral: "Checking your workspace for authentication details..."
-- Web search: "Let me check the web for the latest on that."
+Examples of GOOD acknowledgments (specific to the question):
+- User: "Can you find any invoices for Chris Polashenski?" → "Searching for invoices addressed to Chris Polashenski..."
+- User: "What's the pinout for the sensor?" → "Looking up the sensor pinout information..."
+- User: "Tell me about the authentication flow" → "Searching for authentication flow details..."
+- User: "Find the pricing info" → "Searching for pricing information..."
+
+Examples of BAD acknowledgments (too generic):
+- "Let me help you with that." ❌
+- "I'll search for that." ❌
+- "Looking into it..." ❌
+
+For document searches:
+- If a filename/summary clearly matches the topic, be confident: "Searching your product datasheet for pinout info..."
+- If no obvious match, still be specific about the topic: "Searching your workspace for Feather M0 information..."
 
 For simple chat (greetings, thanks, etc.), use acknowledgment: "" (empty string).
 
@@ -498,9 +506,20 @@ class Agent:
         except Exception as e:
             # Fallback plan if API call or parsing fails
             print(f"[Router] Error: {e}")
+            # Generate a contextual fallback acknowledgment
+            msg_lower = message.lower()
+            # Extract a simple topic-based acknowledgment
+            if "invoice" in msg_lower:
+                fallback_ack = "Searching for invoice information..."
+            elif "find" in msg_lower or "search" in msg_lower:
+                fallback_ack = f"Searching your documents..."
+            elif "what" in msg_lower or "how" in msg_lower or "?" in message:
+                fallback_ack = "Looking that up..."
+            else:
+                fallback_ack = "Searching your workspace..."
             return RequestPlan(
                 category="chat",
-                acknowledgment="Let me help you with that.",
+                acknowledgment=fallback_ack,
                 thinking_budget=self.thinking_budget,
                 search_strategy="docs" if has_documents else "none",
                 complexity="moderate",
@@ -512,6 +531,7 @@ class Agent:
         message: str,
         conversation_history: list[dict] = None,
         namespace: str = "",
+        namespaces: list[str] = None,
         top_k: int = 5,
         has_documents: bool = True,
         resources: list[ResourceInfo] = None,
@@ -551,7 +571,8 @@ class Agent:
                             results = self.retriever.retrieve(
                                 query=query,
                                 top_k=top_k,
-                                namespace=namespace
+                                namespace=namespace,
+                                namespaces=namespaces
                             )
                             all_sources.extend(results)
                             tool_results.append({
@@ -589,6 +610,7 @@ class Agent:
         message: str,
         conversation_history: list[dict] = None,
         namespace: str = "",
+        namespaces: list[str] = None,
         top_k: int = 5,
         has_documents: bool = True,
         resources: list[ResourceInfo] = None,
@@ -734,7 +756,8 @@ class Agent:
                             results = self.retriever.retrieve(
                                 query=query,
                                 top_k=top_k,
-                                namespace=namespace
+                                namespace=namespace,
+                                namespaces=namespaces
                             )
                             all_sources.extend(results)
 

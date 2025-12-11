@@ -34,23 +34,44 @@ class Retriever:
         query: str,
         top_k: int = None,
         namespace: str = "",
+        namespaces: list[str] = None,
         filter: dict = None
     ) -> list[RetrievalResult]:
-        """Retrieve relevant chunks for a query."""
+        """Retrieve relevant chunks for a query.
+
+        Args:
+            query: The query text to search for
+            top_k: Number of results to return
+            namespace: Single namespace to search (deprecated, use namespaces)
+            namespaces: List of namespaces to search across
+            filter: Metadata filter to apply
+        """
         # Embed the query
         query_embedding = self.embedder.embed_text(query)
 
-        # Search vector store
-        results = self.vectorstore.query(
-            embedding=query_embedding,
-            top_k=top_k or self.top_k,
-            namespace=namespace,
-            filter=filter
-        )
+        # Support both single namespace (backwards compat) and multiple namespaces
+        ns_list = namespaces if namespaces else ([namespace] if namespace else [""])
+
+        all_results = []
+        k = top_k or self.top_k
+
+        # Query each namespace and combine results
+        for ns in ns_list:
+            results = self.vectorstore.query(
+                embedding=query_embedding,
+                top_k=k,
+                namespace=ns,
+                filter=filter
+            )
+            all_results.extend(results)
+
+        # Sort by score descending and take top_k
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        all_results = all_results[:k]
 
         # Filter by score threshold and convert to RetrievalResult
         retrieved = []
-        for result in results:
+        for result in all_results:
             if result["score"] >= self.score_threshold:
                 retrieved.append(RetrievalResult(
                     content=result["content"],

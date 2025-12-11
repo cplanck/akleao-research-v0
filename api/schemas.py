@@ -5,35 +5,54 @@ from pydantic import BaseModel
 from api.database import ResourceType, ResourceStatus, MessageRole
 
 
-# Workspace schemas
-class WorkspaceCreate(BaseModel):
+# Project schemas
+class ProjectCreate(BaseModel):
     name: str
 
 
-class WorkspaceUpdate(BaseModel):
+class ProjectUpdate(BaseModel):
     name: str | None = None
     system_instructions: str | None = None
+    last_thread_id: str | None = None
 
 
-class WorkspaceResponse(BaseModel):
+class ProjectResponse(BaseModel):
     id: str
     name: str
     system_instructions: str | None = None
     created_at: datetime
+    last_thread_id: str | None = None
     resource_count: int = 0
+    thread_count: int = 0
 
     class Config:
         from_attributes = True
 
 
-class WorkspaceDetail(WorkspaceResponse):
-    resources: list["ResourceResponse"] = []
+# Thread schemas
+class ThreadCreate(BaseModel):
+    title: str | None = None  # Auto-generate if not provided
+
+
+class ThreadUpdate(BaseModel):
+    title: str | None = None
+
+
+class ThreadResponse(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # Resource schemas
 class ResourceResponse(BaseModel):
     id: str
-    workspace_id: str
+    project_id: str
     type: ResourceType
     source: str
     filename: str | None
@@ -99,7 +118,7 @@ class MessageCreate(BaseModel):
 
 class MessageResponse(BaseModel):
     id: str
-    workspace_id: str
+    thread_id: str
     role: MessageRole
     content: str
     sources: list[SourceInfo] | None = None
@@ -107,3 +126,14 @@ class MessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Project detail (includes resources and threads)
+class ProjectDetail(ProjectResponse):
+    resources: list[ResourceResponse] = []
+    threads: list[ThreadResponse] = []
+
+
+# Thread detail (includes messages)
+class ThreadDetail(ThreadResponse):
+    messages: list[MessageResponse] = []

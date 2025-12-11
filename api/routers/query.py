@@ -7,14 +7,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
-from api.database import get_db, Workspace
+from api.database import get_db, Project, Thread
 from api.schemas import QueryRequest, QueryResponse, SourceInfo
 from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
 from rag.retriever import Retriever
 from rag.agent import Agent, ResourceInfo
 
-router = APIRouter(prefix="/workspaces/{workspace_id}/query", tags=["query"])
+router = APIRouter(tags=["query"])
 
 # Load environment
 load_dotenv()
@@ -39,8 +39,8 @@ def get_agent():
     return Agent(retriever=retriever, api_key=anthropic_key, tavily_api_key=tavily_key)
 
 
-def _build_resources_list(workspace) -> list[ResourceInfo]:
-    """Build a list of ResourceInfo from workspace resources."""
+def _build_resources_list(project) -> list[ResourceInfo]:
+    """Build a list of ResourceInfo from project resources."""
     return [
         ResourceInfo(
             name=r.filename or r.source,
@@ -48,28 +48,56 @@ def _build_resources_list(workspace) -> list[ResourceInfo]:
             status=r.status.value,  # "ready", "pending", "indexing", "failed"
             summary=r.summary  # LLM-generated summary (may be None)
         )
-        for r in workspace.resources
+        for r in project.resources
     ]
 
 
-@router.post("", response_model=QueryResponse)
-def query_workspace(
-    workspace_id: str,
+def _get_resource_namespaces(project) -> list[str]:
+    """Get unique namespaces from project resources.
+
+    This handles the case where old resources were indexed under old workspace IDs
+    while new resources use the project ID.
+    """
+    namespaces = set()
+    for r in project.resources:
+        if r.status.value == "ready":  # Only include indexed resources
+            if r.pinecone_namespace:
+                namespaces.add(r.pinecone_namespace)
+            else:
+                # Fallback to project_id for resources without explicit namespace
+                namespaces.add(project.id)
+    return list(namespaces) if namespaces else [project.id]
+
+
+@router.post("/projects/{project_id}/threads/{thread_id}/query", response_model=QueryResponse)
+def query_thread(
+    project_id: str,
+    thread_id: str,
     request: QueryRequest,
     db: Session = Depends(get_db)
 ):
-    """Query documents in a workspace using the agent."""
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    """Query documents in a project using the agent (within a thread context)."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify thread exists and belongs to project
+    thread = db.query(Thread).filter(
+        Thread.id == thread_id,
+        Thread.project_id == project_id,
+        Thread.deleted_at.is_(None)
+    ).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     agent = get_agent()
 
-    # Check if workspace has documents
-    has_documents = len(workspace.resources) > 0
+    # Check if project has documents
+    has_documents = len(project.resources) > 0
 
     # Build resources list for agent self-awareness
-    resources = _build_resources_list(workspace)
+    resources = _build_resources_list(project)
 
     # Convert conversation history, filtering out empty messages
     history = [
@@ -78,15 +106,23 @@ def query_workspace(
         if msg.content.strip()
     ]
 
+    # Get namespaces from project resources
+    namespaces = _get_resource_namespaces(project)
+
+    # Use per-resource namespaces (handles old workspace IDs and new project IDs)
     response = agent.chat(
         message=request.question,
         conversation_history=history,
-        namespace=workspace_id,
+        namespaces=namespaces,
         top_k=request.top_k,
         has_documents=has_documents,
         resources=resources,
-        system_instructions=workspace.system_instructions
+        system_instructions=project.system_instructions
     )
+
+    # Update project's last_thread_id
+    project.last_thread_id = thread_id
+    db.commit()
 
     # Deduplicate sources by file
     seen_sources = {}
@@ -110,24 +146,35 @@ def query_workspace(
     )
 
 
-@router.post("/stream")
-def query_workspace_stream(
-    workspace_id: str,
+@router.post("/projects/{project_id}/threads/{thread_id}/query/stream")
+def query_thread_stream(
+    project_id: str,
+    thread_id: str,
     request: QueryRequest,
     db: Session = Depends(get_db)
 ):
     """Query with streaming response using the agent."""
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify thread exists and belongs to project
+    thread = db.query(Thread).filter(
+        Thread.id == thread_id,
+        Thread.project_id == project_id,
+        Thread.deleted_at.is_(None)
+    ).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     agent = get_agent()
 
-    # Check if workspace has documents
-    has_documents = len(workspace.resources) > 0
+    # Check if project has documents
+    has_documents = len(project.resources) > 0
 
     # Build resources list for agent self-awareness
-    resources = _build_resources_list(workspace)
+    resources = _build_resources_list(project)
 
     # Convert conversation history, filtering out empty messages
     history = [
@@ -135,6 +182,13 @@ def query_workspace_stream(
         for msg in request.conversation_history
         if msg.content.strip()
     ]
+
+    # Update project's last_thread_id
+    project.last_thread_id = thread_id
+    db.commit()
+
+    # Get namespaces from project resources
+    namespaces = _get_resource_namespaces(project)
 
     # Use a thread-safe approach for events
     import queue
@@ -147,11 +201,11 @@ def query_workspace_stream(
             for event in agent.chat_stream_events(
                 message=request.question,
                 conversation_history=history,
-                namespace=workspace_id,
+                namespaces=namespaces,  # Use per-resource namespaces
                 top_k=request.top_k,
                 has_documents=has_documents,
                 resources=resources,
-                system_instructions=workspace.system_instructions,
+                system_instructions=project.system_instructions,
             ):
                 event_q.put(event)
         except Exception as e:
