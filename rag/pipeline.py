@@ -23,12 +23,15 @@ The summary should help someone understand:
 
 Be specific about what the document covers. Use concrete terms, not vague descriptions.
 
-Examples of good summaries:
-- "Technical datasheet for the XR-500 industrial sensor. Covers electrical specifications, pinout diagrams, operating temperature ranges, and communication protocols (I2C, SPI)."
-- "Employee handbook for Acme Corp. Contains policies on PTO, benefits enrollment, code of conduct, and remote work guidelines."
-- "Research paper on transformer architectures in NLP. Discusses attention mechanisms, BERT, GPT models, and benchmark performance comparisons."
+IMPORTANT: Start your summary directly with "This is a..." followed by the document type. Do NOT include any preamble like "Here is a summary" or similar phrases.
 
-Respond with ONLY the summary text, no labels or prefixes."""
+Examples of good summaries:
+- "This is a technical datasheet for the XR-500 industrial sensor. Covers electrical specifications, pinout diagrams, operating temperature ranges, and communication protocols (I2C, SPI)."
+- "This is an employee handbook for Acme Corp. Contains policies on PTO, benefits enrollment, code of conduct, and remote work guidelines."
+- "This is a research paper on transformer architectures in NLP. Discusses attention mechanisms, BERT, GPT models, and benchmark performance comparisons."
+- "This is a Python codebase for a web scraping tool. Includes modules for HTTP requests, HTML parsing, data extraction, and CSV export functionality."
+
+Respond with ONLY the summary text starting with "This is a...", no labels or prefixes."""
 
 
 def generate_document_summary(
