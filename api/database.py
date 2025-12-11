@@ -45,8 +45,14 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     last_thread_id = Column(String, nullable=True)  # Last active thread for UI restoration
 
-    resources = relationship("Resource", back_populates="project", cascade="all, delete-orphan")
+    # Many-to-many relationship with resources via bridge table
+    project_resources = relationship("ProjectResource", back_populates="project", cascade="all, delete-orphan")
     threads = relationship("Thread", back_populates="project", cascade="all, delete-orphan")
+
+    @property
+    def resources(self):
+        """Helper property to get list of Resource objects linked to this project."""
+        return [pr.resource for pr in self.project_resources if pr.resource]
 
 
 class Thread(Base):
@@ -65,11 +71,12 @@ class Thread(Base):
 
 
 class Resource(Base):
-    """A document, website, or git repo indexed in a project."""
+    """A document, website, or git repo - globally scoped, can be shared across projects."""
     __tablename__ = "resources"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # project_id kept for backward compat during migration, but nullable now
+    project_id = Column(String, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     type = Column(Enum(ResourceType), nullable=False)
     source = Column(String, nullable=False)  # file path, URL, etc.
     filename = Column(String, nullable=True)  # original filename for uploads
@@ -83,8 +90,20 @@ class Resource(Base):
     file_size_bytes = Column(Integer, nullable=True)  # File size for documents
     commit_hash = Column(String, nullable=True)  # Git commit SHA for tracking updates
     pinecone_namespace = Column(String, nullable=True)  # Namespace used when indexing in Pinecone
+    content_hash = Column(String(64), nullable=True, unique=True, index=True)  # SHA256 hash for deduplication
 
-    project = relationship("Project", back_populates="resources")
+    # Many-to-many relationship with projects via bridge table
+    project_resources = relationship("ProjectResource", back_populates="resource", cascade="all, delete-orphan")
+
+    @property
+    def project_count(self):
+        """Number of projects this resource is linked to."""
+        return len(self.project_resources)
+
+    @property
+    def is_shared(self):
+        """True if this resource is used by more than one project."""
+        return len(self.project_resources) > 1
 
 
 class Message(Base):
@@ -99,6 +118,18 @@ class Message(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     thread = relationship("Thread", back_populates="messages")
+
+
+class ProjectResource(Base):
+    """Bridge table for many-to-many relationship between Projects and Resources."""
+    __tablename__ = "project_resources"
+
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    resource_id = Column(String, ForeignKey("resources.id", ondelete="CASCADE"), primary_key=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", back_populates="project_resources")
+    resource = relationship("Resource", back_populates="project_resources")
 
 
 def init_db():
@@ -260,11 +291,14 @@ def _run_incremental_migrations():
     """Run incremental migrations for new columns."""
     from sqlalchemy import text, inspect
     import re
+    import hashlib
+    import os
 
     inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
 
     # Check if resources table exists
-    if "resources" not in inspector.get_table_names():
+    if "resources" not in existing_tables:
         return
 
     # Get columns of resources table
@@ -277,17 +311,58 @@ def _run_incremental_migrations():
             if "pinecone_namespace" not in columns:
                 conn.execute(text("ALTER TABLE resources ADD COLUMN pinecone_namespace VARCHAR"))
                 print("[Migration] Added pinecone_namespace column to resources")
+                columns.append("pinecone_namespace")
 
-            # Migration 2: Populate pinecone_namespace for resources that don't have it
+            # Migration 2: Add content_hash column if it doesn't exist
+            if "content_hash" not in columns:
+                conn.execute(text("ALTER TABLE resources ADD COLUMN content_hash VARCHAR(64)"))
+                print("[Migration] Added content_hash column to resources")
+                columns.append("content_hash")
+
+            # Migration 3: Create project_resources bridge table if it doesn't exist
+            if "project_resources" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE project_resources (
+                        project_id VARCHAR NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        resource_id VARCHAR NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (project_id, resource_id)
+                    )
+                """))
+                print("[Migration] Created project_resources bridge table")
+
+                # Migration 4: Migrate existing resources to bridge table
+                # For each resource with a project_id, create an entry in project_resources
+                resources_with_project = conn.execute(text("""
+                    SELECT id, project_id FROM resources WHERE project_id IS NOT NULL
+                """)).fetchall()
+
+                for r_id, project_id in resources_with_project:
+                    # Check if entry already exists (shouldn't but be safe)
+                    existing = conn.execute(text("""
+                        SELECT 1 FROM project_resources
+                        WHERE project_id = :project_id AND resource_id = :resource_id
+                    """), {"project_id": project_id, "resource_id": r_id}).fetchone()
+
+                    if not existing:
+                        conn.execute(text("""
+                            INSERT INTO project_resources (project_id, resource_id, added_at)
+                            VALUES (:project_id, :resource_id, CURRENT_TIMESTAMP)
+                        """), {"project_id": project_id, "resource_id": r_id})
+
+                if resources_with_project:
+                    print(f"[Migration] Migrated {len(resources_with_project)} resources to bridge table")
+
+            # Migration 5: Populate pinecone_namespace for resources that don't have it
             # For documents with paths like "uploads/<workspace_id>/filename.pdf", extract workspace_id
             # For websites and git repos, use the project_id
+            uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
+
             resources = conn.execute(text("""
                 SELECT id, source, project_id, type, status
                 FROM resources
                 WHERE pinecone_namespace IS NULL AND status = 'READY'
             """)).fetchall()
-
-            uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
 
             for resource in resources:
                 r_id, source, project_id, r_type, status = resource
@@ -311,6 +386,31 @@ def _run_incremental_migrations():
 
             if resources:
                 print(f"[Migration] Populated pinecone_namespace for {len(resources)} resources")
+
+            # Migration 6: Compute content_hash for document resources that don't have it
+            docs_without_hash = conn.execute(text("""
+                SELECT id, source, type FROM resources
+                WHERE content_hash IS NULL AND type = 'document'
+            """)).fetchall()
+
+            hashed_count = 0
+            for r_id, source, r_type in docs_without_hash:
+                if source and os.path.exists(source):
+                    try:
+                        sha256 = hashlib.sha256()
+                        with open(source, 'rb') as f:
+                            for chunk in iter(lambda: f.read(8192), b''):
+                                sha256.update(chunk)
+                        content_hash = sha256.hexdigest()
+                        conn.execute(text("""
+                            UPDATE resources SET content_hash = :hash WHERE id = :id
+                        """), {"hash": content_hash, "id": r_id})
+                        hashed_count += 1
+                    except Exception as e:
+                        print(f"[Migration] Could not hash resource {r_id}: {e}")
+
+            if hashed_count:
+                print(f"[Migration] Computed content_hash for {hashed_count} document resources")
 
             trans.commit()
         except Exception as e:

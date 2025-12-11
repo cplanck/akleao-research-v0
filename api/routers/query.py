@@ -55,18 +55,20 @@ def _build_resources_list(project) -> list[ResourceInfo]:
 def _get_resource_namespaces(project) -> list[str]:
     """Get unique namespaces from project resources.
 
-    This handles the case where old resources were indexed under old workspace IDs
-    while new resources use the project ID.
+    With the global resource model, each resource has its own namespace
+    (resource_id). This handles backward compatibility for old resources
+    that may have been indexed with workspace/project IDs.
     """
     namespaces = set()
     for r in project.resources:
         if r.status.value == "ready":  # Only include indexed resources
             if r.pinecone_namespace:
+                # Use the stored namespace (resource_id for new resources)
                 namespaces.add(r.pinecone_namespace)
             else:
-                # Fallback to project_id for resources without explicit namespace
-                namespaces.add(project.id)
-    return list(namespaces) if namespaces else [project.id]
+                # Fallback to resource.id for resources without explicit namespace
+                namespaces.add(r.id)
+    return list(namespaces) if namespaces else []
 
 
 @router.post("/projects/{project_id}/threads/{thread_id}/query", response_model=QueryResponse)
@@ -206,6 +208,7 @@ def query_thread_stream(
                 has_documents=has_documents,
                 resources=resources,
                 system_instructions=project.system_instructions,
+                context_only=request.context_only,
             ):
                 event_q.put(event)
         except Exception as e:

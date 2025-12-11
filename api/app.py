@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(projects.router)
 app.include_router(threads.router)
 app.include_router(resources.router)
+app.include_router(resources.global_router)  # Global resources (library)
 app.include_router(query.router)
 app.include_router(messages.router)
 

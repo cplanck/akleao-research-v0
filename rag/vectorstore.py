@@ -150,3 +150,64 @@ class VectorStore:
     def stats(self) -> dict:
         """Get index statistics."""
         return self.index.describe_index_stats()
+
+    def list_vectors(self, namespace: str = "", limit: int = 100) -> list[dict]:
+        """List all vectors in a namespace with their metadata.
+
+        Args:
+            namespace: Pinecone namespace to list vectors from
+            limit: Maximum number of vectors to return
+
+        Returns:
+            List of vectors with id, content, source, and metadata
+        """
+        # Use Pinecone's list API to get vector IDs
+        # In Pinecone v8+, list() returns a generator that yields pages
+        vector_ids = []
+        try:
+            for page in self.index.list(namespace=namespace):
+                # Each page has a 'vectors' attribute containing vector info
+                if hasattr(page, 'vectors'):
+                    for vec in page.vectors:
+                        # In v8, each vector in the list has an 'id' attribute
+                        if hasattr(vec, 'id'):
+                            vector_ids.append(vec.id)
+                        else:
+                            # Fallback if it's just a string
+                            vector_ids.append(str(vec))
+                else:
+                    # Handle case where page is directly iterable
+                    vector_ids.extend(page)
+                if len(vector_ids) >= limit:
+                    break
+        except Exception as e:
+            print(f"Error listing vectors: {e}")
+            return []
+
+        if not vector_ids:
+            return []
+
+        # Trim to limit
+        vector_ids = vector_ids[:limit]
+
+        # Fetch the vectors with their metadata (in batches of 100)
+        vectors = []
+        batch_size = 100
+        for i in range(0, len(vector_ids), batch_size):
+            batch_ids = vector_ids[i:i + batch_size]
+            result = self.index.fetch(ids=batch_ids, namespace=namespace)
+
+            for vec_id, vec_data in result.vectors.items():
+                metadata = vec_data.metadata or {}
+                vectors.append({
+                    "id": vec_id,
+                    "content": metadata.get("content", ""),
+                    "source": metadata.get("source", ""),
+                    "chunk_index": metadata.get("chunk_index", 0),
+                    "metadata": metadata
+                })
+
+        # Sort by chunk_index to maintain document order
+        vectors.sort(key=lambda x: x.get("chunk_index", 0))
+
+        return vectors

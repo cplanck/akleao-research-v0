@@ -52,7 +52,7 @@ class ThreadResponse(BaseModel):
 # Resource schemas
 class ResourceResponse(BaseModel):
     id: str
-    project_id: str
+    project_id: str | None  # Now nullable since resources are global
     type: ResourceType
     source: str
     filename: str | None
@@ -64,9 +64,22 @@ class ResourceResponse(BaseModel):
     indexing_duration_ms: int | None = None
     file_size_bytes: int | None = None
     commit_hash: str | None = None  # Git commit SHA for tracking updates
+    content_hash: str | None = None  # SHA256 hash for deduplication
+    project_count: int = 1  # Number of projects using this resource
+    is_shared: bool = False  # True if used by multiple projects
 
     class Config:
         from_attributes = True
+
+
+class ResourceLinkRequest(BaseModel):
+    """Request to link an existing resource to a project."""
+    resource_id: str
+
+
+class GlobalResourceResponse(ResourceResponse):
+    """Resource response with list of projects using it."""
+    projects: list[str] = []  # List of project IDs
 
 
 class UrlResourceCreate(BaseModel):
@@ -88,6 +101,7 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
     conversation_history: list[ConversationMessage] = []
+    context_only: bool = False  # When True, only answer from provided documents
 
 
 class SourceInfo(BaseModel):

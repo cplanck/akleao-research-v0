@@ -185,10 +185,23 @@ def build_system_prompt(
     has_documents: bool,
     has_web_search: bool,
     resources: list[ResourceInfo] = None,
-    system_instructions: str = None
+    system_instructions: str = None,
+    context_only: bool = False
 ) -> str:
     """Build system prompt based on available tools, resources, and user instructions."""
     prompt_parts = [BASE_SYSTEM_PROMPT]
+
+    # Add context-only mode instructions (highest priority constraint)
+    if context_only:
+        prompt_parts.append("""
+## CONTEXT-ONLY MODE (STRICT)
+You are in CONTEXT-ONLY mode. This means:
+1. ONLY answer questions using information found in the user's uploaded documents
+2. DO NOT use any knowledge from your training data
+3. If the documents don't contain the answer, say "I couldn't find information about that in your documents"
+4. ALWAYS search the documents before answering
+5. Never make up or infer information not explicitly in the documents
+6. Be explicit about which document the information came from""")
 
     # Add user-defined workspace instructions (highest priority)
     if system_instructions and system_instructions.strip():
@@ -615,11 +628,13 @@ class Agent:
         has_documents: bool = True,
         resources: list[ResourceInfo] = None,
         enable_thinking: bool = True,
-        system_instructions: str = None
+        system_instructions: str = None,
+        context_only: bool = False
     ) -> Iterator[AgentEvent]:
         """Stream a conversation turn with events for UI updates.
 
         Supports extended thinking which streams the agent's reasoning process.
+        When context_only=True, only uses document search (no web, no training data).
         """
         messages = list(conversation_history or [])
         messages.append({"role": "user", "content": message})
@@ -627,9 +642,10 @@ class Agent:
         all_sources = []
 
         # Build tools and prompt based on what's available
-        has_web_search = bool(self.tavily_api_key)
+        # In context_only mode, disable web search
+        has_web_search = bool(self.tavily_api_key) and not context_only
         tools = build_tools(has_documents, has_web_search)
-        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions)
+        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions, context_only)
 
         # Step 1: Plan the request using the router
         plan = self.plan_request(
