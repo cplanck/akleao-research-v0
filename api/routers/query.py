@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
-from api.database import get_db, Project, Thread
+from api.database import get_db, Project, Thread, Message
 from api.schemas import QueryRequest, QueryResponse, SourceInfo
 from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
@@ -71,6 +71,80 @@ def _get_resource_namespaces(project) -> list[str]:
     return list(namespaces) if namespaces else []
 
 
+def _build_parent_context(thread: Thread, db: Session, max_depth: int = 3) -> str | None:
+    """Build context string from ancestor threads for subthreads.
+
+    Returns a context string that explains the full ancestry chain,
+    including context texts from each level and recent messages from immediate parent.
+    """
+    if not thread.parent_thread_id:
+        return None
+
+    # Build ancestor chain (walk up parent_thread_id)
+    ancestors = []  # List of (parent_thread, context_text_from_child) tuples
+    current = thread
+    depth = 0
+
+    while current.parent_thread_id and depth < max_depth:
+        parent = db.query(Thread).filter(
+            Thread.id == current.parent_thread_id,
+            Thread.deleted_at.is_(None)
+        ).first()
+        if not parent:
+            break
+        # Store the parent and the context_text that spawned the current thread
+        ancestors.append((parent, current.context_text))
+        current = parent
+        depth += 1
+
+    if not ancestors:
+        return None
+
+    # Build context string
+    context_parts = []
+
+    # Add note about being a subthread with depth info
+    context_parts.append("[SUBTHREAD CONTEXT]")
+    if len(ancestors) == 1:
+        context_parts.append(f"This is a focused exploration nested 1 level deep.")
+    else:
+        context_parts.append(f"This is a focused exploration nested {len(ancestors)} level(s) deep.")
+
+    # Add ancestry trail (from oldest ancestor to immediate parent)
+    context_parts.append("\nAncestry trail:")
+    for i, (ancestor, context_text) in enumerate(reversed(ancestors)):
+        level = i + 1
+        context_parts.append(f"  Level {level}: \"{ancestor.title}\"")
+        if context_text and i < len(ancestors) - 1:  # Show context for intermediate levels
+            truncated = context_text[:100] + "..." if len(context_text) > 100 else context_text
+            context_parts.append(f"    → Diving into: \"{truncated}\"")
+
+    # Add the selected text that spawned this subthread (immediate context)
+    if thread.context_text:
+        context_parts.append(f"\nThe user wants to dive deeper into this specific text:")
+        context_parts.append(f'"{thread.context_text}"')
+
+    # Get recent messages from immediate parent only (to avoid token bloat)
+    immediate_parent = ancestors[0][0]
+    parent_messages = db.query(Message).filter(
+        Message.thread_id == immediate_parent.id
+    ).order_by(Message.created_at.desc()).limit(4).all()
+
+    if parent_messages:
+        parent_messages.reverse()  # Put in chronological order
+        context_parts.append(f"\nRecent context from immediate parent \"{immediate_parent.title}\":")
+        for msg in parent_messages:
+            role = "User" if msg.role == "user" else "Assistant"
+            # Truncate long messages more aggressively
+            content = msg.content[:300] + "..." if len(msg.content) > 300 else msg.content
+            context_parts.append(f"- {role}: {content}")
+
+    context_parts.append("\n[END SUBTHREAD CONTEXT]")
+    context_parts.append("Please provide a focused, in-depth response about the specific topic the user wants to explore.")
+
+    return "\n".join(context_parts)
+
+
 @router.post("/projects/{project_id}/threads/{thread_id}/query", response_model=QueryResponse)
 def query_thread(
     project_id: str,
@@ -111,6 +185,17 @@ def query_thread(
     # Get namespaces from project resources
     namespaces = _get_resource_namespaces(project)
 
+    # Build parent thread context for subthreads
+    parent_context = _build_parent_context(thread, db)
+
+    # Combine system instructions with parent context
+    combined_instructions = project.system_instructions or ""
+    if parent_context:
+        if combined_instructions:
+            combined_instructions = f"{combined_instructions}\n\n{parent_context}"
+        else:
+            combined_instructions = parent_context
+
     # Use per-resource namespaces (handles old workspace IDs and new project IDs)
     response = agent.chat(
         message=request.question,
@@ -119,7 +204,7 @@ def query_thread(
         top_k=request.top_k,
         has_documents=has_documents,
         resources=resources,
-        system_instructions=project.system_instructions
+        system_instructions=combined_instructions if combined_instructions else None
     )
 
     # Update project's last_thread_id
@@ -192,6 +277,17 @@ def query_thread_stream(
     # Get namespaces from project resources
     namespaces = _get_resource_namespaces(project)
 
+    # Build parent thread context for subthreads
+    parent_context = _build_parent_context(thread, db)
+
+    # Combine system instructions with parent context
+    combined_instructions = project.system_instructions or ""
+    if parent_context:
+        if combined_instructions:
+            combined_instructions = f"{combined_instructions}\n\n{parent_context}"
+        else:
+            combined_instructions = parent_context
+
     # Use a thread-safe approach for events
     import queue
     import threading
@@ -207,7 +303,7 @@ def query_thread_stream(
                 top_k=request.top_k,
                 has_documents=has_documents,
                 resources=resources,
-                system_instructions=project.system_instructions,
+                system_instructions=combined_instructions if combined_instructions else None,
                 context_only=request.context_only,
             ):
                 event_q.put(event)

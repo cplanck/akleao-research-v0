@@ -8,8 +8,18 @@ from sqlalchemy.orm import Session
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from sqlalchemy import func
+
 from api.database import get_db, Project, Thread, Message
 from api.schemas import ThreadCreate, ThreadUpdate, ThreadResponse, ThreadDetail, MessageResponse
+
+
+def get_child_count(db: Session, thread_id: str) -> int:
+    """Get the number of child threads for a thread."""
+    return db.query(Thread).filter(
+        Thread.parent_thread_id == thread_id,
+        Thread.deleted_at.is_(None)
+    ).count()
 
 load_dotenv()
 
@@ -70,17 +80,41 @@ def create_thread(
     thread: ThreadCreate,
     db: Session = Depends(get_db)
 ):
-    """Create a new thread in a project."""
+    """Create a new thread in a project.
+
+    Can create child threads by providing parent_thread_id and parent_message_id.
+    """
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate parent thread exists if provided
+    if thread.parent_thread_id:
+        parent = db.query(Thread).filter(
+            Thread.id == thread.parent_thread_id,
+            Thread.project_id == project_id,
+            Thread.deleted_at.is_(None)
+        ).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent thread not found")
+
+    # Validate parent message exists if provided
+    if thread.parent_message_id:
+        parent_message = db.query(Message).filter(
+            Message.id == thread.parent_message_id
+        ).first()
+        if not parent_message:
+            raise HTTPException(status_code=404, detail="Parent message not found")
 
     # Auto-generate title if not provided
     title = thread.title or "New Thread"
 
     db_thread = Thread(
         project_id=project_id,
-        title=title
+        title=title,
+        parent_thread_id=thread.parent_thread_id,
+        parent_message_id=thread.parent_message_id,
+        context_text=thread.context_text
     )
     db.add(db_thread)
     db.commit()
@@ -95,7 +129,10 @@ def create_thread(
         project_id=db_thread.project_id,
         title=db_thread.title,
         created_at=db_thread.created_at,
-        updated_at=db_thread.updated_at
+        updated_at=db_thread.updated_at,
+        parent_thread_id=db_thread.parent_thread_id,
+        context_text=db_thread.context_text,
+        child_count=0  # New thread has no children
     )
 
 
@@ -118,7 +155,10 @@ def list_threads(project_id: str, db: Session = Depends(get_db)):
             project_id=t.project_id,
             title=t.title,
             created_at=t.created_at,
-            updated_at=t.updated_at
+            updated_at=t.updated_at,
+            parent_thread_id=t.parent_thread_id,
+            context_text=t.context_text,
+            child_count=get_child_count(db, t.id)
         )
         for t in threads
     ]
@@ -151,6 +191,9 @@ def get_thread(
         title=thread.title,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+        parent_thread_id=thread.parent_thread_id,
+        context_text=thread.context_text,
+        child_count=get_child_count(db, thread.id),
         messages=[
             MessageResponse(
                 id=m.id,
@@ -193,7 +236,10 @@ def update_thread(
         project_id=thread.project_id,
         title=thread.title,
         created_at=thread.created_at,
-        updated_at=thread.updated_at
+        updated_at=thread.updated_at,
+        parent_thread_id=thread.parent_thread_id,
+        context_text=thread.context_text,
+        child_count=get_child_count(db, thread.id)
     )
 
 
@@ -264,5 +310,8 @@ def auto_generate_title(
         project_id=thread.project_id,
         title=thread.title,
         created_at=thread.created_at,
-        updated_at=thread.updated_at
+        updated_at=thread.updated_at,
+        parent_thread_id=thread.parent_thread_id,
+        context_text=thread.context_text,
+        child_count=get_child_count(db, thread.id)
     )

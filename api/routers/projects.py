@@ -6,6 +6,14 @@ from sqlalchemy.orm import Session
 from api.database import get_db, Project, Thread
 from api.schemas import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectDetail, ThreadResponse
 
+
+def get_child_count(db: Session, thread_id: str) -> int:
+    """Get the number of child threads for a thread."""
+    return db.query(Thread).filter(
+        Thread.parent_thread_id == thread_id,
+        Thread.deleted_at.is_(None)
+    ).count()
+
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
@@ -70,7 +78,10 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
                 project_id=t.project_id,
                 title=t.title,
                 created_at=t.created_at,
-                updated_at=t.updated_at
+                updated_at=t.updated_at,
+                parent_thread_id=t.parent_thread_id,
+                context_text=t.context_text,
+                child_count=get_child_count(db, t.id)
             )
             for t in active_threads
         ]

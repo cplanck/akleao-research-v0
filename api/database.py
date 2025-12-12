@@ -65,9 +65,15 @@ class Thread(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)  # Soft delete
+    # Parent thread support for "Dive Deeper" feature
+    parent_thread_id = Column(String, ForeignKey("threads.id", ondelete="SET NULL"), nullable=True)
+    parent_message_id = Column(String, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    context_text = Column(Text, nullable=True)  # The selected text that spawned this thread
 
     project = relationship("Project", back_populates="threads")
-    messages = relationship("Message", back_populates="thread", cascade="all, delete-orphan")
+    messages = relationship("Message", back_populates="thread", cascade="all, delete-orphan", foreign_keys="Message.thread_id")
+    parent_thread = relationship("Thread", remote_side="Thread.id", backref="child_threads", foreign_keys=[parent_thread_id])
+    parent_message = relationship("Message", foreign_keys=[parent_message_id])
 
 
 class Resource(Base):
@@ -117,7 +123,7 @@ class Message(Base):
     sources = Column(Text, nullable=True)  # JSON string for source info
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    thread = relationship("Thread", back_populates="messages")
+    thread = relationship("Thread", back_populates="messages", foreign_keys=[thread_id])
 
 
 class ProjectResource(Base):
@@ -130,6 +136,23 @@ class ProjectResource(Base):
 
     project = relationship("Project", back_populates="project_resources")
     resource = relationship("Resource", back_populates="project_resources")
+
+
+class Finding(Base):
+    """A key finding saved from a chat response."""
+    __tablename__ = "findings"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    thread_id = Column(String, ForeignKey("threads.id", ondelete="SET NULL"), nullable=True)
+    message_id = Column(String, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    content = Column(Text, nullable=False)  # The saved text
+    note = Column(Text, nullable=True)  # Optional user note
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="findings")
+    thread = relationship("Thread", backref="findings")
+    message = relationship("Message", backref="findings")
 
 
 def init_db():
@@ -411,6 +434,37 @@ def _run_incremental_migrations():
 
             if hashed_count:
                 print(f"[Migration] Computed content_hash for {hashed_count} document resources")
+
+            # Migration 7: Add Thread parent columns for "Dive Deeper" feature
+            if "threads" in existing_tables:
+                thread_columns = [col["name"] for col in inspector.get_columns("threads")]
+
+                if "parent_thread_id" not in thread_columns:
+                    conn.execute(text("ALTER TABLE threads ADD COLUMN parent_thread_id VARCHAR"))
+                    print("[Migration] Added parent_thread_id column to threads")
+
+                if "parent_message_id" not in thread_columns:
+                    conn.execute(text("ALTER TABLE threads ADD COLUMN parent_message_id VARCHAR"))
+                    print("[Migration] Added parent_message_id column to threads")
+
+                if "context_text" not in thread_columns:
+                    conn.execute(text("ALTER TABLE threads ADD COLUMN context_text TEXT"))
+                    print("[Migration] Added context_text column to threads")
+
+            # Migration 8: Create findings table for Key Findings feature
+            if "findings" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE findings (
+                        id VARCHAR PRIMARY KEY,
+                        project_id VARCHAR NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        thread_id VARCHAR REFERENCES threads(id) ON DELETE SET NULL,
+                        message_id VARCHAR REFERENCES messages(id) ON DELETE SET NULL,
+                        content TEXT NOT NULL,
+                        note TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                print("[Migration] Created findings table")
 
             trans.commit()
         except Exception as e:

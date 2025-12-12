@@ -32,6 +32,9 @@ class ProjectResponse(BaseModel):
 # Thread schemas
 class ThreadCreate(BaseModel):
     title: str | None = None  # Auto-generate if not provided
+    parent_thread_id: str | None = None  # For "Dive Deeper" child threads
+    parent_message_id: str | None = None  # Message that spawned this thread
+    context_text: str | None = None  # Selected text that spawned this thread
 
 
 class ThreadUpdate(BaseModel):
@@ -44,6 +47,9 @@ class ThreadResponse(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
+    parent_thread_id: str | None = None
+    context_text: str | None = None
+    child_count: int = 0  # Number of child threads
 
     class Config:
         from_attributes = True
@@ -130,12 +136,20 @@ class MessageCreate(BaseModel):
     sources: list[SourceInfo] | None = None
 
 
+class ChildThreadInfo(BaseModel):
+    """Info about a child thread spawned from a message."""
+    id: str
+    title: str
+    context_text: str | None = None
+
+
 class MessageResponse(BaseModel):
     id: str
     thread_id: str
     role: MessageRole
     content: str
     sources: list[SourceInfo] | None = None
+    child_threads: list[ChildThreadInfo] | None = None  # Threads spawned from this message
     created_at: datetime
 
     class Config:
@@ -151,3 +165,28 @@ class ProjectDetail(ProjectResponse):
 # Thread detail (includes messages)
 class ThreadDetail(ThreadResponse):
     messages: list[MessageResponse] = []
+
+
+# Finding schemas (Key Findings feature)
+class FindingCreate(BaseModel):
+    content: str
+    thread_id: str | None = None
+    message_id: str | None = None
+    note: str | None = None
+
+
+class FindingUpdate(BaseModel):
+    note: str | None = None
+
+
+class FindingResponse(BaseModel):
+    id: str
+    project_id: str
+    thread_id: str | None = None
+    message_id: str | None = None
+    content: str
+    note: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

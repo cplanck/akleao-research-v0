@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
-from api.routers import projects, threads, resources, query, messages
+from api.routers import projects, threads, resources, query, messages, findings
 
 app = FastAPI(
     title="Simage RAG API",
@@ -28,6 +28,7 @@ app.include_router(resources.router)
 app.include_router(resources.global_router)  # Global resources (library)
 app.include_router(query.router)
 app.include_router(messages.router)
+app.include_router(findings.router)
 
 
 @app.on_event("startup")

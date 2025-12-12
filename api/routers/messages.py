@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from api.database import get_db, Project, Thread, Message
-from api.schemas import MessageCreate, MessageResponse, SourceInfo
+from api.schemas import MessageCreate, MessageResponse, SourceInfo, ChildThreadInfo
 
 router = APIRouter(tags=["messages"])
 
@@ -33,6 +33,24 @@ def list_messages(
         .all()
     )
 
+    # Get all child threads spawned from messages in this thread
+    message_ids = [m.id for m in messages]
+    child_threads = db.query(Thread).filter(
+        Thread.parent_message_id.in_(message_ids),
+        Thread.deleted_at.is_(None)
+    ).all()
+
+    # Group child threads by parent_message_id
+    children_by_message: dict[str, list[ChildThreadInfo]] = {}
+    for child in child_threads:
+        if child.parent_message_id not in children_by_message:
+            children_by_message[child.parent_message_id] = []
+        children_by_message[child.parent_message_id].append(ChildThreadInfo(
+            id=child.id,
+            title=child.title,
+            context_text=child.context_text,
+        ))
+
     result = []
     for msg in messages:
         sources = None
@@ -44,6 +62,7 @@ def list_messages(
             role=msg.role,
             content=msg.content,
             sources=sources,
+            child_threads=children_by_message.get(msg.id),
             created_at=msg.created_at
         ))
     return result
