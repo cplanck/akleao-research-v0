@@ -2,13 +2,14 @@
 
 import os
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from typing import Optional
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
 from api.database import get_db, Project, Thread, Message
-from api.schemas import QueryRequest, QueryResponse, SourceInfo
+from api.schemas import QueryRequest, QueryResponse, SourceInfo, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult
 from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
 from rag.retriever import Retriever
@@ -20,8 +21,12 @@ router = APIRouter(tags=["query"])
 load_dotenv()
 
 
-def get_agent():
-    """Get agent instance with retriever."""
+def get_agent(version: Optional[str] = None):
+    """Get agent instance with retriever.
+
+    Args:
+        version: Agent version to use ("v1" or "v2"). If None, uses default from env/agent.
+    """
     openai_key = os.getenv("OPENAI_API_KEY")
     pinecone_key = os.getenv("PINECONE_API_KEY")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
@@ -36,7 +41,7 @@ def get_agent():
     vectorstore.create_index_if_not_exists()
     retriever = Retriever(embedder=embedder, vectorstore=vectorstore)
 
-    return Agent(retriever=retriever, api_key=anthropic_key, tavily_api_key=tavily_key)
+    return Agent(retriever=retriever, api_key=anthropic_key, tavily_api_key=tavily_key, version=version)
 
 
 def _build_resources_list(project) -> list[ResourceInfo]:
@@ -238,9 +243,14 @@ def query_thread_stream(
     project_id: str,
     thread_id: str,
     request: QueryRequest,
+    agent_version: Optional[str] = Query(default=None, description="Agent version: 'v1' or 'v2'"),
     db: Session = Depends(get_db)
 ):
-    """Query with streaming response using the agent."""
+    """Query with streaming response using the agent.
+
+    Args:
+        agent_version: Optional agent version for A/B testing ("v1" or "v2")
+    """
     # Verify project exists
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -255,7 +265,7 @@ def query_thread_stream(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    agent = get_agent()
+    agent = get_agent(version=agent_version)
 
     # Check if project has documents
     has_documents = len(project.resources) > 0
@@ -288,6 +298,22 @@ def query_thread_stream(
         else:
             combined_instructions = parent_context
 
+    # Create save_finding callback with access to db context
+    from api.database import Finding
+
+    def save_finding_callback(content: str, note: str | None) -> dict:
+        """Save a finding to the database."""
+        db_finding = Finding(
+            project_id=project_id,
+            thread_id=thread_id,
+            content=content,
+            note=note
+        )
+        db.add(db_finding)
+        db.commit()
+        db.refresh(db_finding)
+        return {"id": db_finding.id, "content": db_finding.content}
+
     # Use a thread-safe approach for events
     import queue
     import threading
@@ -305,6 +331,7 @@ def query_thread_stream(
                 resources=resources,
                 system_instructions=combined_instructions if combined_instructions else None,
                 context_only=request.context_only,
+                save_finding_callback=save_finding_callback,
             ):
                 event_q.put(event)
         except Exception as e:
@@ -323,7 +350,22 @@ def query_thread_stream(
                 event = event_q.get(timeout=0.1)
 
                 if event.type == "plan":
-                    yield f"data: {json.dumps({'type': 'plan', 'category': event.data['category'], 'acknowledgment': event.data['acknowledgment'], 'complexity': event.data['complexity'], 'search_strategy': event.data['search_strategy']})}\n\n"
+                    # Build plan event with base fields
+                    plan_data = {
+                        'type': 'plan',
+                        'category': event.data['category'],
+                        'acknowledgment': event.data['acknowledgment'],
+                        'complexity': event.data['complexity'],
+                        'search_strategy': event.data['search_strategy']
+                    }
+                    # Add V2 fields if present
+                    if 'matched_resource' in event.data:
+                        plan_data['matched_resource'] = event.data['matched_resource']
+                    if 'resource_confidence' in event.data:
+                        plan_data['resource_confidence'] = event.data['resource_confidence']
+                    if 'is_followup' in event.data:
+                        plan_data['is_followup'] = event.data['is_followup']
+                    yield f"data: {json.dumps(plan_data)}\n\n"
 
                 elif event.type == "status":
                     yield f"data: {json.dumps({'type': 'status', 'status': event.data['status']})}\n\n"
@@ -332,7 +374,18 @@ def query_thread_stream(
                     yield f"data: {json.dumps({'type': 'tool_call', 'tool': event.data['tool'], 'query': event.data.get('query', '')})}\n\n"
 
                 elif event.type == "tool_result":
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': event.data['tool'], 'found': event.data['found'], 'query': event.data.get('query', '')})}\n\n"
+                    result_data = {
+                        'type': 'tool_result',
+                        'tool': event.data['tool'],
+                        'found': event.data['found'],
+                        'query': event.data.get('query', '')
+                    }
+                    # Include save_finding specific fields
+                    if event.data['tool'] == 'save_finding':
+                        result_data['saved'] = event.data.get('saved', False)
+                        result_data['finding_id'] = event.data.get('finding_id')
+                        result_data['finding_content'] = event.data.get('finding_content')
+                    yield f"data: {json.dumps(result_data)}\n\n"
 
                 elif event.type == "sources":
                     # Deduplicate sources by file
@@ -350,7 +403,10 @@ def query_thread_stream(
                     yield f"data: {json.dumps({'type': 'chunk', 'content': event.data['content']})}\n\n"
 
                 elif event.type == "usage":
-                    yield f"data: {json.dumps({'type': 'usage', 'input_tokens': event.data['input_tokens'], 'output_tokens': event.data['output_tokens'], 'total_tokens': event.data['total_tokens']})}\n\n"
+                    input_tokens = event.data.get('input_tokens', 0)
+                    output_tokens = event.data.get('output_tokens', 0)
+                    total_tokens = event.data.get('total_tokens', input_tokens + output_tokens)
+                    yield f"data: {json.dumps({'type': 'usage', 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens})}\n\n"
 
                 elif event.type == "done":
                     if not sources_sent:
@@ -375,3 +431,60 @@ def query_thread_stream(
             "Connection": "keep-alive",
         }
     )
+
+
+def get_retriever():
+    """Get retriever instance for semantic search."""
+    openai_key = os.getenv("OPENAI_API_KEY")
+    pinecone_key = os.getenv("PINECONE_API_KEY")
+
+    embedder = Embedder(api_key=openai_key)
+    vectorstore = VectorStore(
+        api_key=pinecone_key,
+        index_name=os.getenv("PINECONE_INDEX_NAME", "simage-rag"),
+        dimension=embedder.dimensions
+    )
+    vectorstore.create_index_if_not_exists()
+    return Retriever(embedder=embedder, vectorstore=vectorstore)
+
+
+@router.post("/projects/{project_id}/search", response_model=SemanticSearchResponse)
+def semantic_search(
+    project_id: str,
+    request: SemanticSearchRequest,
+    db: Session = Depends(get_db)
+):
+    """Perform semantic search across project documents using RAG."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get namespaces from project resources
+    namespaces = _get_resource_namespaces(project)
+
+    if not namespaces:
+        return SemanticSearchResponse(results=[], query=request.query)
+
+    # Perform semantic search
+    retriever = get_retriever()
+    results = retriever.retrieve(
+        query=request.query,
+        top_k=request.top_k,
+        namespaces=namespaces
+    )
+
+    # Convert to response format
+    search_results = [
+        SemanticSearchResult(
+            content=r.content,
+            source=r.source,
+            score=r.score,
+            snippet=r.content[:150].strip() + "..." if len(r.content) > 150 else r.content,
+            resource_id=r.metadata.get("resource_id"),
+            page_ref=r.metadata.get("page_ref"),
+        )
+        for r in results
+    ]
+
+    return SemanticSearchResponse(results=search_results, query=request.query)

@@ -190,3 +190,23 @@ class FindingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Semantic search schemas
+class SemanticSearchRequest(BaseModel):
+    query: str
+    top_k: int = 10
+
+
+class SemanticSearchResult(BaseModel):
+    content: str
+    source: str
+    score: float
+    snippet: str  # Shorter excerpt for display
+    resource_id: str | None = None
+    page_ref: str | None = None
+
+
+class SemanticSearchResponse(BaseModel):
+    results: list[SemanticSearchResult]
+    query: str
