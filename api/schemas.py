@@ -55,6 +55,28 @@ class ThreadResponse(BaseModel):
         from_attributes = True
 
 
+# Data file metadata schema
+class DataFileMetadata(BaseModel):
+    row_count: int | None = None
+    column_count: int | None = None
+    columns: list[dict] | None = None  # [{name, dtype, sample_values}]
+    content_description: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+# Image metadata schema
+class ImageMetadata(BaseModel):
+    width: int | None = None
+    height: int | None = None
+    format: str | None = None
+    vision_description: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
 # Resource schemas
 class ResourceResponse(BaseModel):
     id: str
@@ -73,6 +95,9 @@ class ResourceResponse(BaseModel):
     content_hash: str | None = None  # SHA256 hash for deduplication
     project_count: int = 1  # Number of projects using this resource
     is_shared: bool = False  # True if used by multiple projects
+    # New metadata for data files and images
+    data_metadata: DataFileMetadata | None = None
+    image_metadata: ImageMetadata | None = None
 
     class Config:
         from_attributes = True

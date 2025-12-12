@@ -21,6 +21,8 @@ class ResourceType(str, enum.Enum):
     DOCUMENT = "document"
     WEBSITE = "website"
     GIT_REPOSITORY = "git_repository"
+    DATA_FILE = "data_file"  # CSV, Excel, JSON
+    IMAGE = "image"  # PNG, JPG, etc.
 
 
 class ResourceStatus(str, enum.Enum):
@@ -153,6 +155,51 @@ class Finding(Base):
     project = relationship("Project", backref="findings")
     thread = relationship("Thread", backref="findings")
     message = relationship("Message", backref="findings")
+
+
+class DataResourceMetadata(Base):
+    """Schema and statistics for data files (CSV, Excel, JSON)."""
+    __tablename__ = "data_resource_metadata"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    resource_id = Column(String, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False, unique=True)
+
+    # Schema information
+    columns_json = Column(Text, nullable=True)  # JSON: [{name, dtype, sample_values, null_count}]
+    row_count = Column(Integer, nullable=True)
+    column_count = Column(Integer, nullable=True)
+
+    # For Excel files with multiple sheets
+    sheet_names_json = Column(Text, nullable=True)  # JSON array of sheet names
+
+    # Sample data for LLM context
+    sample_rows_json = Column(Text, nullable=True)  # First 5 rows as JSON
+
+    # LLM-generated semantic description (crucial for routing!)
+    content_description = Column(Text, nullable=True)  # "Sales data for Q1 2024, contains customer names..."
+
+    # Statistics summary
+    numeric_summary_json = Column(Text, nullable=True)  # {column: {min, max, mean, std}}
+
+    resource = relationship("Resource", backref="data_metadata")
+
+
+class ImageResourceMetadata(Base):
+    """Metadata for image files."""
+    __tablename__ = "image_resource_metadata"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    resource_id = Column(String, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False, unique=True)
+
+    # Basic image info
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    format = Column(String, nullable=True)  # PNG, JPEG, etc.
+
+    # Vision-generated description (crucial for routing!)
+    vision_description = Column(Text, nullable=True)  # LLM vision analysis of the image
+
+    resource = relationship("Resource", backref="image_metadata")
 
 
 def init_db():
@@ -465,6 +512,37 @@ def _run_incremental_migrations():
                     )
                 """))
                 print("[Migration] Created findings table")
+
+            # Migration 9: Create data_resource_metadata table for CSV/Excel/JSON files
+            if "data_resource_metadata" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE data_resource_metadata (
+                        id VARCHAR PRIMARY KEY,
+                        resource_id VARCHAR NOT NULL UNIQUE REFERENCES resources(id) ON DELETE CASCADE,
+                        columns_json TEXT,
+                        row_count INTEGER,
+                        column_count INTEGER,
+                        sheet_names_json TEXT,
+                        sample_rows_json TEXT,
+                        content_description TEXT,
+                        numeric_summary_json TEXT
+                    )
+                """))
+                print("[Migration] Created data_resource_metadata table")
+
+            # Migration 10: Create image_resource_metadata table for image files
+            if "image_resource_metadata" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE image_resource_metadata (
+                        id VARCHAR PRIMARY KEY,
+                        resource_id VARCHAR NOT NULL UNIQUE REFERENCES resources(id) ON DELETE CASCADE,
+                        width INTEGER,
+                        height INTEGER,
+                        format VARCHAR,
+                        vision_description TEXT
+                    )
+                """))
+                print("[Migration] Created image_resource_metadata table")
 
             trans.commit()
         except Exception as e:

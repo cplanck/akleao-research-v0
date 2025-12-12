@@ -45,16 +45,54 @@ def get_agent(version: Optional[str] = None):
 
 
 def _build_resources_list(project) -> list[ResourceInfo]:
-    """Build a list of ResourceInfo from project resources."""
-    return [
-        ResourceInfo(
+    """Build a list of ResourceInfo from project resources with metadata.
+
+    Only includes resources with READY status to avoid presenting failed
+    or pending resources to the agent.
+    """
+    import json
+    import os
+
+    resources = []
+    for r in project.resources:
+        # Only include READY resources - skip failed/pending/indexing
+        if r.status.value != "ready":
+            continue
+
+        # For data files and images, verify the file actually exists
+        if r.type.value in ("data_file", "image"):
+            if not r.source or not os.path.exists(r.source):
+                continue
+        resource_info = ResourceInfo(
             name=r.filename or r.source,
-            type=r.type.value,  # "document" or "website"
+            type=r.type.value,  # "document", "website", "data_file", "image"
             status=r.status.value,  # "ready", "pending", "indexing", "failed"
-            summary=r.summary  # LLM-generated summary (may be None)
+            summary=r.summary,  # LLM-generated summary (may be None)
+            id=r.id,  # Resource ID for targeted searches
+            file_path=r.source,  # Path to the file for analysis tools
         )
-        for r in project.resources
-    ]
+
+        # Add data file metadata if available
+        if r.type.value == "data_file" and r.data_metadata:
+            dm = r.data_metadata[0] if isinstance(r.data_metadata, list) else r.data_metadata
+            if dm:
+                resource_info.row_count = dm.row_count
+                if dm.columns_json:
+                    try:
+                        columns = json.loads(dm.columns_json)
+                        resource_info.columns = [c.get("name", "") for c in columns]
+                    except:
+                        pass
+
+        # Add image metadata if available
+        if r.type.value == "image" and r.image_metadata:
+            im = r.image_metadata[0] if isinstance(r.image_metadata, list) else r.image_metadata
+            if im and im.width and im.height:
+                resource_info.dimensions = f"{im.width}x{im.height}"
+
+        resources.append(resource_info)
+
+    return resources
 
 
 def _get_resource_namespaces(project) -> list[str]:
@@ -174,11 +212,13 @@ def query_thread(
 
     agent = get_agent()
 
-    # Check if project has documents
-    has_documents = len(project.resources) > 0
-
     # Build resources list for agent self-awareness
     resources = _build_resources_list(project)
+
+    # Check what types of resources exist
+    has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
+    has_data_files = any(r.type == "data_file" for r in resources)
+    has_images = any(r.type == "image" for r in resources)
 
     # Convert conversation history, filtering out empty messages
     history = [
@@ -267,11 +307,13 @@ def query_thread_stream(
 
     agent = get_agent(version=agent_version)
 
-    # Check if project has documents
-    has_documents = len(project.resources) > 0
-
     # Build resources list for agent self-awareness
     resources = _build_resources_list(project)
+
+    # Check what types of resources exist
+    has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
+    has_data_files = any(r.type == "data_file" for r in resources)
+    has_images = any(r.type == "image" for r in resources)
 
     # Convert conversation history, filtering out empty messages
     history = [
@@ -332,6 +374,8 @@ def query_thread_stream(
                 system_instructions=combined_instructions if combined_instructions else None,
                 context_only=request.context_only,
                 save_finding_callback=save_finding_callback,
+                has_data_files=has_data_files,
+                has_images=has_images,
             ):
                 event_q.put(event)
         except Exception as e:

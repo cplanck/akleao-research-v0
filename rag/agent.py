@@ -198,6 +198,62 @@ Include enough context that it makes sense on its own.""",
     }
 }
 
+ANALYZE_DATA_TOOL = {
+    "name": "analyze_data",
+    "description": """Analyze a CSV, Excel, or JSON data file.
+
+Use this tool when the user wants to:
+- Query data from a specific file (e.g., "What are the top 10 customers?")
+- Calculate statistics (e.g., "What's the average price?")
+- Filter or aggregate data (e.g., "Show sales by region")
+- Explore data (e.g., "What columns are in this file?")
+
+You MUST specify which resource to analyze by filename.
+The query should describe what analysis to perform in natural language.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "resource_name": {
+                "type": "string",
+                "description": "The filename of the data resource to analyze (e.g., 'sales_data.csv', 'inventory.xlsx')"
+            },
+            "query": {
+                "type": "string",
+                "description": "Natural language description of the analysis to perform (e.g., 'top 10 customers by total sales', 'average price by category')"
+            }
+        },
+        "required": ["resource_name", "query"]
+    }
+}
+
+VIEW_IMAGE_TOOL = {
+    "name": "view_image",
+    "description": """View and analyze an image file using vision.
+
+Use this tool when the user wants to:
+- Describe what's in an image
+- Extract text from a screenshot or diagram
+- Analyze a chart or graph
+- Compare visual elements
+- Answer questions about image content
+
+You MUST specify which image resource to view by filename.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "resource_name": {
+                "type": "string",
+                "description": "The filename of the image to analyze (e.g., 'chart.png', 'screenshot.jpg')"
+            },
+            "question": {
+                "type": "string",
+                "description": "What to look for or analyze in the image (e.g., 'What does this chart show?', 'Extract the text from this screenshot')"
+            }
+        },
+        "required": ["resource_name", "question"]
+    }
+}
+
 BASE_SYSTEM_PROMPT = """You are a helpful assistant.
 
 Be extremely concise. Respond like a human would in a chat - short, direct, no fluff.
@@ -222,9 +278,16 @@ Be human. Be brief."""
 class ResourceInfo:
     """Information about a resource in the workspace."""
     name: str
-    type: str  # "document" or "website"
+    type: str  # "document", "website", "data_file", "image"
     status: str  # "ready", "pending", "indexing", "failed"
     summary: str | None = None  # LLM-generated summary of the document content
+    id: str | None = None  # Resource ID
+    # For data files
+    columns: list[str] | None = None  # Column names
+    row_count: int | None = None
+    file_path: str | None = None  # Path to the file for analysis
+    # For images
+    dimensions: str | None = None  # e.g., "1920x1080"
 
 
 def build_system_prompt(
@@ -232,7 +295,9 @@ def build_system_prompt(
     has_web_search: bool,
     resources: list[ResourceInfo] = None,
     system_instructions: str = None,
-    context_only: bool = False
+    context_only: bool = False,
+    has_data_files: bool = False,
+    has_images: bool = False,
 ) -> str:
     """Build system prompt based on available tools, resources, and user instructions."""
     prompt_parts = [BASE_SYSTEM_PROMPT]
@@ -259,37 +324,74 @@ You are in CONTEXT-ONLY mode. This means:
         tools_desc.append("search_documents (search user's uploaded documents)")
     if has_web_search:
         tools_desc.append("search_web (search the internet)")
+    if has_data_files:
+        tools_desc.append("analyze_data (analyze CSV/Excel/JSON files)")
+    if has_images:
+        tools_desc.append("view_image (analyze images with vision)")
 
     if tools_desc:
         prompt_parts.append(f"Available tools: {', '.join(tools_desc)}.")
 
-    # Add workspace resources section for self-awareness
+    # Add workspace resources section, grouped by type for clarity
     if resources:
         ready_resources = [r for r in resources if r.status == "ready"]
         pending_resources = [r for r in resources if r.status in ("pending", "indexing")]
 
         if ready_resources or pending_resources:
-            resource_section = "\n\nWorkspace Resources (what you have access to):"
+            # Group ready resources by type
+            docs = [r for r in ready_resources if r.type in ("document", "website", "git_repository")]
+            data_files = [r for r in ready_resources if r.type == "data_file"]
+            images = [r for r in ready_resources if r.type == "image"]
 
-            if ready_resources:
-                resource_section += "\n- Ready for search:"
-                for r in ready_resources:
-                    resource_section += f"\n  - {r.name} ({r.type})"
+            resource_section = "\n\nWorkspace Resources:"
 
+            # Documents (for search_documents)
+            if docs:
+                resource_section += "\n\n## Documents (use search_documents)"
+                for r in docs:
+                    desc = f": {r.summary[:100]}..." if r.summary and len(r.summary) > 100 else f": {r.summary}" if r.summary else ""
+                    resource_section += f"\n  - {r.name}{desc}"
+
+            # Data files (for analyze_data)
+            if data_files:
+                resource_section += "\n\n## Data Files (use analyze_data)"
+                for r in data_files:
+                    row_info = f" ({r.row_count:,} rows)" if r.row_count else ""
+                    col_info = f" - Columns: {', '.join(r.columns[:5])}{'...' if len(r.columns or []) > 5 else ''}" if r.columns else ""
+                    desc = f": {r.summary}" if r.summary else ""
+                    resource_section += f"\n  - {r.name}{row_info}{desc}"
+                    if col_info:
+                        resource_section += f"\n    {col_info}"
+
+            # Images (for view_image)
+            if images:
+                resource_section += "\n\n## Images (use view_image)"
+                for r in images:
+                    dim_info = f" [{r.dimensions}]" if r.dimensions else ""
+                    desc = f": {r.summary}" if r.summary else ""
+                    resource_section += f"\n  - {r.name}{dim_info}{desc}"
+
+            # Pending resources
             if pending_resources:
-                resource_section += "\n- Still processing:"
+                resource_section += "\n\n## Still Processing:"
                 for r in pending_resources:
                     resource_section += f"\n  - {r.name} ({r.type})"
 
             prompt_parts.append(resource_section)
-    elif has_documents is False:
-        prompt_parts.append("\n\nWorkspace Resources: None yet. The user hasn't uploaded any documents.")
+    elif has_documents is False and has_data_files is False and has_images is False:
+        prompt_parts.append("\n\nWorkspace Resources: None yet. The user hasn't uploaded any files.")
 
     return "\n".join(prompt_parts)
 
 
-def build_tools(has_documents: bool, has_web_search: bool, can_save_findings: bool = False) -> list:
-    """Build tool list based on availability."""
+def build_tools(
+    has_documents: bool,
+    has_web_search: bool,
+    can_save_findings: bool = False,
+    has_data_files: bool = False,
+    has_images: bool = False,
+) -> list:
+    """Build tool list based on available resources."""
     tools = []
     if has_documents:
         tools.append(DOCUMENT_SEARCH_TOOL)
@@ -297,6 +399,10 @@ def build_tools(has_documents: bool, has_web_search: bool, can_save_findings: bo
         tools.append(WEB_SEARCH_TOOL)
     if can_save_findings:
         tools.append(SAVE_FINDING_TOOL)
+    if has_data_files:
+        tools.append(ANALYZE_DATA_TOOL)
+    if has_images:
+        tools.append(VIEW_IMAGE_TOOL)
     return tools
 
 
@@ -640,7 +746,8 @@ class Agent:
         self.model = model
         self.max_tokens = max_tokens
         self.thinking_budget = thinking_budget
-        self.client = Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        self.anthropic_api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.client = Anthropic(api_key=self.anthropic_api_key)
         self.tavily_api_key = tavily_api_key or os.getenv("TAVILY_API_KEY")
         self.version = version or AGENT_VERSION
 
@@ -1118,7 +1225,9 @@ class Agent:
         enable_thinking: bool = True,
         system_instructions: str = None,
         context_only: bool = False,
-        save_finding_callback: Callable[[str, str | None], dict] = None
+        save_finding_callback: Callable[[str, str | None], dict] = None,
+        has_data_files: bool = False,
+        has_images: bool = False,
     ) -> Iterator[AgentEvent]:
         """Stream a conversation turn with events for UI updates.
 
@@ -1137,8 +1246,8 @@ class Agent:
         # In context_only mode, disable web search
         has_web_search = bool(self.tavily_api_key) and not context_only
         can_save_findings = save_finding_callback is not None
-        tools = build_tools(has_documents, has_web_search, can_save_findings)
-        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions, context_only)
+        tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images)
+        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions, context_only, has_data_files, has_images)
 
         # Step 1: Plan the request using the router
         plan = self.plan_request(
@@ -1432,6 +1541,189 @@ class Agent:
                                 "tool_use_id": block.id,
                                 "content": result_message
                             })
+
+                        elif block.name == "analyze_data":
+                            resource_name = block.input.get("resource_name", "")
+                            query = block.input.get("query", "")
+
+                            # Emit tool call event
+                            yield AgentEvent("tool_call", {
+                                "tool": "analyze_data",
+                                "query": f"{resource_name}: {query[:50]}..."
+                            })
+
+                            # Find the resource by name
+                            resource_info = None
+                            if resources:
+                                for r in resources:
+                                    if r.name == resource_name or r.name.lower() == resource_name.lower():
+                                        resource_info = r
+                                        break
+
+                            if resource_info and resource_info.file_path:
+                                # Verify file exists before attempting analysis
+                                import os
+                                if not os.path.exists(resource_info.file_path):
+                                    yield AgentEvent("tool_result", {
+                                        "tool": "analyze_data",
+                                        "found": 0,
+                                        "query": query[:50] + "..." if len(query) > 50 else query
+                                    })
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": block.id,
+                                        "content": f"Error: The file for '{resource_name}' no longer exists on disk. The resource may need to be re-uploaded."
+                                    })
+                                else:
+                                    try:
+                                        from rag.data_analysis import DataAnalyzer
+                                        analyzer = DataAnalyzer(api_key=self.anthropic_api_key)
+                                        result = analyzer.analyze(resource_info.file_path, query)
+
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "analyze_data",
+                                            "found": 1,
+                                            "query": query[:50] + "..." if len(query) > 50 else query
+                                        })
+
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": f"Analysis of {resource_name}:\n\n{result}"
+                                        })
+                                    except Exception as e:
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "analyze_data",
+                                            "found": 0,
+                                            "query": query[:50] + "..." if len(query) > 50 else query
+                                        })
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": f"Error analyzing {resource_name}: {str(e)}"
+                                        })
+                            else:
+                                yield AgentEvent("tool_result", {
+                                    "tool": "analyze_data",
+                                    "found": 0,
+                                    "query": query[:50] + "..." if len(query) > 50 else query
+                                })
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": f"Resource '{resource_name}' not found. Available data files: {', '.join([r.name for r in (resources or []) if r.type == 'data_file'])}"
+                                })
+
+                        elif block.name == "view_image":
+                            resource_name = block.input.get("resource_name", "")
+                            question = block.input.get("question", "Describe this image")
+
+                            # Emit tool call event
+                            yield AgentEvent("tool_call", {
+                                "tool": "view_image",
+                                "query": f"{resource_name}: {question[:50]}..."
+                            })
+
+                            # Find the resource by name
+                            resource_info = None
+                            if resources:
+                                for r in resources:
+                                    if r.name == resource_name or r.name.lower() == resource_name.lower():
+                                        resource_info = r
+                                        break
+
+                            if resource_info and resource_info.file_path:
+                                # Verify file exists before attempting to view
+                                import os as os_module
+                                if not os_module.path.exists(resource_info.file_path):
+                                    yield AgentEvent("tool_result", {
+                                        "tool": "view_image",
+                                        "found": 0,
+                                        "query": question[:50] + "..." if len(question) > 50 else question
+                                    })
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": block.id,
+                                        "content": f"Error: The file for '{resource_name}' no longer exists on disk. The resource may need to be re-uploaded."
+                                    })
+                                else:
+                                    try:
+                                        import base64
+                                        from pathlib import Path
+
+                                        # Read and encode image
+                                        with open(resource_info.file_path, "rb") as f:
+                                            image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+
+                                        # Determine media type
+                                        ext = Path(resource_info.file_path).suffix.lower()
+                                        media_types = {
+                                            ".png": "image/png",
+                                            ".jpg": "image/jpeg",
+                                            ".jpeg": "image/jpeg",
+                                            ".gif": "image/gif",
+                                            ".webp": "image/webp",
+                                        }
+                                        media_type = media_types.get(ext, "image/png")
+
+                                        # Call Claude with vision
+                                        vision_response = self.client.messages.create(
+                                            model="claude-sonnet-4-20250514",
+                                            max_tokens=1024,
+                                            messages=[{
+                                                "role": "user",
+                                                "content": [
+                                                    {
+                                                        "type": "image",
+                                                        "source": {
+                                                            "type": "base64",
+                                                            "media_type": media_type,
+                                                            "data": image_data
+                                                        }
+                                                    },
+                                                    {
+                                                        "type": "text",
+                                                        "text": f"Filename: {resource_name}\n\nQuestion: {question}"
+                                                    }
+                                                ]
+                                            }]
+                                        )
+
+                                        vision_result = vision_response.content[0].text
+
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "view_image",
+                                            "found": 1,
+                                            "query": question[:50] + "..." if len(question) > 50 else question
+                                        })
+
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": f"Image analysis of {resource_name}:\n\n{vision_result}"
+                                        })
+                                    except Exception as e:
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "view_image",
+                                            "found": 0,
+                                            "query": question[:50] + "..." if len(question) > 50 else question
+                                        })
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": f"Error viewing {resource_name}: {str(e)}"
+                                        })
+                            else:
+                                yield AgentEvent("tool_result", {
+                                    "tool": "view_image",
+                                    "found": 0,
+                                    "query": question[:50] + "..." if len(question) > 50 else question
+                                })
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": f"Image '{resource_name}' not found. Available images: {', '.join([r.name for r in (resources or []) if r.type == 'image'])}"
+                                })
 
                 # Emit sources (only for document search)
                 if all_sources:
