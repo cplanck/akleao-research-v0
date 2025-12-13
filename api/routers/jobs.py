@@ -11,6 +11,7 @@ from api.database import (
     JobStatus, MessageRole
 )
 from api.tasks.conversation import process_conversation_task
+from api.routers.websocket import publish_global_job_update, publish_project_job_update
 
 router = APIRouter(tags=["jobs"])
 
@@ -156,6 +157,10 @@ def create_job(
     db.add(job)
     db.commit()
     db.refresh(job)
+
+    # Publish job creation to WebSocket channels for real-time UI updates
+    publish_project_job_update(project_id, thread_id, "pending")
+    publish_global_job_update(project_id, thread_id, job.id, "pending")
 
     # Only enqueue Celery task if start_immediately is True
     # Otherwise, frontend will use SSE streaming and call /start if user navigates away

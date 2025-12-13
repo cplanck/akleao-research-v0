@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from api.tasks import celery_app, publish_job_event
-from api.routers.websocket import publish_project_job_update
+from api.routers.websocket import publish_project_job_update, publish_global_job_update
 from api.database import (
     SessionLocal, ConversationJob, Message, Notification, Thread, Project,
     JobStatus, NotificationType, MessageRole
@@ -193,6 +193,8 @@ def process_conversation_task(self, job_id: str):
         publish_job_event(job_id, "status", {"status": "running"})
         # Publish to project channel (for sidebar indicators)
         publish_project_job_update(job.project_id, job.thread_id, "running")
+        # Publish to global channel (for app-level WebSocket)
+        publish_global_job_update(job.project_id, job.thread_id, job_id, "running")
 
         # Load project and thread
         project = db.query(Project).filter(Project.id == job.project_id).first()
@@ -334,6 +336,8 @@ def process_conversation_task(self, job_id: str):
         })
         # Publish to project channel (for sidebar indicators)
         publish_project_job_update(job.project_id, job.thread_id, "completed")
+        # Publish to global channel (for app-level WebSocket)
+        publish_global_job_update(job.project_id, job.thread_id, job_id, "completed")
 
         # Create notification ONLY if user isn't watching
         # If job was polled within last 10 seconds, user is watching
@@ -376,6 +380,8 @@ def process_conversation_task(self, job_id: str):
             })
             # Publish to project channel (for sidebar indicators)
             publish_project_job_update(job.project_id, job.thread_id, "failed")
+            # Publish to global channel (for app-level WebSocket)
+            publish_global_job_update(job.project_id, job.thread_id, job_id, "failed")
 
             # Create failure notification
             thread = db.query(Thread).filter(Thread.id == job.thread_id).first()

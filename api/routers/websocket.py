@@ -16,6 +16,26 @@ def get_project_jobs_channel(project_id: str) -> str:
     return f"project:{project_id}:jobs"
 
 
+def get_global_jobs_channel() -> str:
+    """Get the Redis pub/sub channel for global job updates (all projects)."""
+    return "global:jobs"
+
+
+def publish_global_job_update(project_id: str, thread_id: str, job_id: str, status: str):
+    """Publish a job status update to the global channel."""
+    channel = get_global_jobs_channel()
+    message = json.dumps({
+        "type": "job_update",
+        "data": {
+            "project_id": project_id,
+            "thread_id": thread_id,
+            "job_id": job_id,
+            "status": status,
+        }
+    })
+    redis_client.publish(channel, message)
+
+
 def publish_project_job_update(project_id: str, thread_id: str, status: str):
     """Publish a job status update to the project channel."""
     channel = get_project_jobs_channel(project_id)
@@ -297,11 +317,19 @@ async def project_stream(websocket: WebSocket, project_id: str):
                                         "job_id": job.id,
                                         "thread_id": thread_id,
                                         "status": job.status.value,
+                                        # Current phase and action (what agent is doing NOW)
+                                        "current_phase": state.get("current_phase", "initializing"),
+                                        "current_action": state.get("current_action", ""),
+                                        # Accumulated output
                                         "content": state.get("content", "") or job.partial_response or "",
                                         "sources": state.get("sources", []),
-                                        "acknowledgment": state.get("acknowledgment", ""),
-                                        "activity": state.get("activity", []),
                                         "thinking": state.get("thinking", ""),
+                                        # Full activity history
+                                        "activity": state.get("activity", []),
+                                        # Timing
+                                        "started_at": state.get("started_at", ""),
+                                        # Backwards compat
+                                        "acknowledgment": state.get("acknowledgment", ""),
                                     }
                                 })
 
@@ -317,6 +345,13 @@ async def project_stream(websocket: WebSocket, project_id: str):
                                         "job_id": None,
                                         "thread_id": thread_id,
                                         "status": "idle",
+                                        "current_phase": "idle",
+                                        "current_action": "",
+                                        "content": "",
+                                        "sources": [],
+                                        "activity": [],
+                                        "thinking": "",
+                                        "started_at": "",
                                     }
                                 })
 
@@ -431,6 +466,240 @@ async def project_active_jobs_stream(websocket: WebSocket, project_id: str):
         if pubsub:
             pubsub.unsubscribe()
             pubsub.close()
+        db.close()
+        try:
+            await websocket.close()
+        except:
+            pass
+
+
+@router.websocket("/ws/app")
+async def app_stream(websocket: WebSocket):
+    """
+    App-level WebSocket - single connection for entire session, never disconnects.
+
+    Stays connected across project and thread navigation. Handles:
+    - Global job status updates (which threads have active jobs, across all projects)
+    - Job streaming for the currently subscribed thread
+
+    Client messages:
+    - { "type": "subscribe_thread", "project_id": "...", "thread_id": "..." }
+    - { "type": "unsubscribe_thread" }
+
+    Server messages:
+    - { "type": "active_jobs", "data": { "jobs": [{ project_id, thread_id, job_id, status }, ...] } }
+    - { "type": "job_update", "data": { project_id, thread_id, job_id, status } }
+    - { "type": "job_state", "data": { project_id, thread_id, job_id, status, content, sources, ... } }
+    - { "type": "job_event", "data": { type, ... } }
+    """
+    await websocket.accept()
+
+    db: Session = SessionLocal()
+    global_pubsub = None
+    job_pubsub = None
+    subscribed_project_id = None
+    subscribed_thread_id = None
+    subscribed_job_id = None
+
+    try:
+        # Send initial list of ALL active jobs across all projects
+        active_jobs = db.query(ConversationJob).filter(
+            ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
+        ).all()
+
+        jobs_data = [
+            {
+                "project_id": job.project_id,
+                "thread_id": job.thread_id,
+                "job_id": job.id,
+                "status": job.status.value,
+            }
+            for job in active_jobs
+        ]
+        await websocket.send_json({
+            "type": "active_jobs",
+            "data": {"jobs": jobs_data}
+        })
+
+        # Subscribe to global job updates channel
+        global_channel = get_global_jobs_channel()
+        global_pubsub = redis_client.pubsub()
+        global_pubsub.subscribe(global_channel)
+
+        # Main event loop
+        while True:
+            # Check for global job updates
+            global_msg = global_pubsub.get_message(timeout=0.05)
+            if global_msg and global_msg["type"] == "message":
+                try:
+                    event = json.loads(global_msg["data"])
+                    # Always forward job_update events (for sidebar indicators across all projects)
+                    await websocket.send_json(event)
+                except json.JSONDecodeError:
+                    pass
+
+            # Check for job-specific events (only if subscribed to a thread)
+            if job_pubsub and subscribed_job_id:
+                job_msg = job_pubsub.get_message(timeout=0.05)
+                if job_msg and job_msg["type"] == "message":
+                    try:
+                        event = json.loads(job_msg["data"])
+                        # Forward job events for the subscribed thread
+                        # Include job_id so client can verify this event is for the right job
+                        await websocket.send_json({
+                            "type": "job_event",
+                            "data": {
+                                **event,
+                                "job_id": subscribed_job_id,
+                                "thread_id": subscribed_thread_id,
+                            }
+                        })
+                        # If job is done/error, unsubscribe from job channel and send idle state
+                        if event.get("type") in ("done", "error"):
+                            job_pubsub.unsubscribe()
+                            job_pubsub.close()
+                            job_pubsub = None
+                            # Send idle state so client knows job is complete
+                            await websocket.send_json({
+                                "type": "job_state",
+                                "data": {
+                                    "project_id": subscribed_project_id,
+                                    "thread_id": subscribed_thread_id,
+                                    "job_id": None,
+                                    "status": "idle",
+                                    "current_phase": "idle",
+                                    "current_action": "",
+                                    "content": "",
+                                    "sources": [],
+                                    "activity": [],
+                                    "thinking": "",
+                                    "started_at": "",
+                                }
+                            })
+                            subscribed_job_id = None
+                    except json.JSONDecodeError:
+                        pass
+
+            # Check for client messages (subscribe/unsubscribe)
+            try:
+                client_msg = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=0.01
+                )
+                try:
+                    data = json.loads(client_msg)
+                    msg_type = data.get("type")
+
+                    if msg_type == "subscribe_thread":
+                        project_id = data.get("project_id")
+                        thread_id = data.get("thread_id")
+                        if project_id and thread_id:
+                            # Unsubscribe from old job if any
+                            if job_pubsub:
+                                job_pubsub.unsubscribe()
+                                job_pubsub.close()
+                                job_pubsub = None
+
+                            subscribed_project_id = project_id
+                            subscribed_thread_id = thread_id
+
+                            # Refresh db session to get latest data
+                            db.expire_all()
+
+                            # Find active job for this thread
+                            job = db.query(ConversationJob).filter(
+                                ConversationJob.thread_id == thread_id,
+                                ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
+                            ).order_by(ConversationJob.created_at.desc()).first()
+
+                            if job:
+                                subscribed_job_id = job.id
+
+                                # Send current job state snapshot
+                                state = get_job_state(job.id)
+                                await websocket.send_json({
+                                    "type": "job_state",
+                                    "data": {
+                                        "project_id": project_id,
+                                        "thread_id": thread_id,
+                                        "job_id": job.id,
+                                        "status": job.status.value,
+                                        # Current phase and action (what agent is doing NOW)
+                                        "current_phase": state.get("current_phase", "initializing"),
+                                        "current_action": state.get("current_action", ""),
+                                        # Accumulated output
+                                        "content": state.get("content", "") or job.partial_response or "",
+                                        "sources": state.get("sources", []),
+                                        "thinking": state.get("thinking", ""),
+                                        # Full activity history
+                                        "activity": state.get("activity", []),
+                                        # Timing
+                                        "started_at": state.get("started_at", ""),
+                                        # Backwards compat
+                                        "acknowledgment": state.get("acknowledgment", ""),
+                                    }
+                                })
+
+                                # Subscribe to job channel for real-time events
+                                job_channel = get_job_channel(job.id)
+                                job_pubsub = redis_client.pubsub()
+                                job_pubsub.subscribe(job_channel)
+                            else:
+                                # No active job for this thread
+                                await websocket.send_json({
+                                    "type": "job_state",
+                                    "data": {
+                                        "project_id": project_id,
+                                        "thread_id": thread_id,
+                                        "job_id": None,
+                                        "status": "idle",
+                                        "current_phase": "idle",
+                                        "current_action": "",
+                                        "content": "",
+                                        "sources": [],
+                                        "activity": [],
+                                        "thinking": "",
+                                        "started_at": "",
+                                    }
+                                })
+
+                    elif msg_type == "unsubscribe_thread":
+                        if job_pubsub:
+                            job_pubsub.unsubscribe()
+                            job_pubsub.close()
+                            job_pubsub = None
+                        subscribed_project_id = None
+                        subscribed_thread_id = None
+                        subscribed_job_id = None
+
+                except json.JSONDecodeError:
+                    pass
+
+            except asyncio.TimeoutError:
+                # No client message, that's fine
+                pass
+            except WebSocketDisconnect:
+                break
+
+            await asyncio.sleep(0.01)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "data": {"message": str(e)}
+            })
+        except:
+            pass
+    finally:
+        if global_pubsub:
+            global_pubsub.unsubscribe()
+            global_pubsub.close()
+        if job_pubsub:
+            job_pubsub.unsubscribe()
+            job_pubsub.close()
         db.close()
         try:
             await websocket.close()
