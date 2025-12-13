@@ -37,6 +37,21 @@ class MessageRole(str, enum.Enum):
     ASSISTANT = "assistant"
 
 
+class JobStatus(str, enum.Enum):
+    """Status of a background conversation job."""
+    PENDING = "pending"      # Job created, not started yet
+    RUNNING = "running"      # Agent is processing
+    COMPLETED = "completed"  # Response finished successfully
+    FAILED = "failed"        # Error occurred
+    CANCELLED = "cancelled"  # User cancelled
+
+
+class NotificationType(str, enum.Enum):
+    """Type of notification."""
+    JOB_COMPLETED = "job_completed"
+    JOB_FAILED = "job_failed"
+
+
 class Project(Base):
     """A project contains threads and resources."""
     __tablename__ = "projects"
@@ -200,6 +215,82 @@ class ImageResourceMetadata(Base):
     vision_description = Column(Text, nullable=True)  # LLM vision analysis of the image
 
     resource = relationship("Resource", backref="image_metadata")
+
+
+class ConversationJob(Base):
+    """A background job for processing a conversation query.
+
+    This enables persistent conversations that survive page navigation.
+    When user submits a question, a job is created and processed by a Celery worker.
+    The user can navigate away and return later to see the completed response.
+    """
+    __tablename__ = "conversation_jobs"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    thread_id = Column(String, ForeignKey("threads.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+
+    # Job state
+    status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
+
+    # User message that triggered this job
+    user_message_id = Column(String, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    user_message_content = Column(Text, nullable=False)  # Store content for worker access
+    context_only = Column(Integer, default=0, nullable=False)  # 1 if only use document context (no web)
+
+    # Response tracking
+    assistant_message_id = Column(String, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    partial_response = Column(Text, nullable=True)  # Accumulated response so far
+    sources_json = Column(Text, nullable=True)  # JSON string of sources
+
+    # Error handling
+    error_message = Column(Text, nullable=True)
+    celery_task_id = Column(String, nullable=True)  # For task management/cancellation
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    last_polled_at = Column(DateTime, nullable=True)  # Track if user is watching (for notification logic)
+
+    # Performance tracking
+    token_count = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    # Relationships
+    thread = relationship("Thread", backref="conversation_jobs")
+    project = relationship("Project", backref="conversation_jobs")
+    user_message = relationship("Message", foreign_keys=[user_message_id])
+    assistant_message = relationship("Message", foreign_keys=[assistant_message_id])
+
+
+class Notification(Base):
+    """User notification for completed/failed conversation jobs.
+
+    Notifications are created when a job completes while the user is not viewing the thread.
+    They appear in the bell icon dropdown and can be marked as read.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    thread_id = Column(String, ForeignKey("threads.id", ondelete="CASCADE"), nullable=True)
+    job_id = Column(String, ForeignKey("conversation_jobs.id", ondelete="CASCADE"), nullable=True)
+
+    type = Column(Enum(NotificationType), nullable=False)
+    title = Column(String, nullable=False)  # e.g., "Response ready in 'Pricing Research'"
+    body = Column(Text, nullable=True)  # Preview of the response
+
+    # Read status
+    read = Column(Integer, default=0, nullable=False)  # SQLite doesn't have true Boolean, use Integer
+    read_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    project = relationship("Project", backref="notifications")
+    thread = relationship("Thread", backref="notifications")
+    job = relationship("ConversationJob", backref="notifications")
 
 
 def init_db():
@@ -543,6 +634,56 @@ def _run_incremental_migrations():
                     )
                 """))
                 print("[Migration] Created image_resource_metadata table")
+
+            # Migration 11: Create conversation_jobs table for persistent conversations
+            if "conversation_jobs" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE conversation_jobs (
+                        id VARCHAR PRIMARY KEY,
+                        thread_id VARCHAR NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                        project_id VARCHAR NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        status VARCHAR NOT NULL DEFAULT 'pending',
+                        user_message_id VARCHAR REFERENCES messages(id) ON DELETE SET NULL,
+                        user_message_content TEXT NOT NULL,
+                        assistant_message_id VARCHAR REFERENCES messages(id) ON DELETE SET NULL,
+                        partial_response TEXT,
+                        sources_json TEXT,
+                        error_message TEXT,
+                        celery_task_id VARCHAR,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        started_at DATETIME,
+                        completed_at DATETIME,
+                        last_polled_at DATETIME,
+                        token_count INTEGER,
+                        duration_ms INTEGER
+                    )
+                """))
+                print("[Migration] Created conversation_jobs table")
+
+            # Migration 12: Create notifications table for job completion alerts
+            if "notifications" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE notifications (
+                        id VARCHAR PRIMARY KEY,
+                        project_id VARCHAR NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        thread_id VARCHAR REFERENCES threads(id) ON DELETE CASCADE,
+                        job_id VARCHAR REFERENCES conversation_jobs(id) ON DELETE CASCADE,
+                        type VARCHAR NOT NULL,
+                        title VARCHAR NOT NULL,
+                        body TEXT,
+                        read INTEGER DEFAULT 0 NOT NULL,
+                        read_at DATETIME,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                print("[Migration] Created notifications table")
+
+            # Migration 13: Add context_only column to conversation_jobs
+            if "conversation_jobs" in existing_tables:
+                job_columns = [col["name"] for col in inspector.get_columns("conversation_jobs")]
+                if "context_only" not in job_columns:
+                    conn.execute(text("ALTER TABLE conversation_jobs ADD COLUMN context_only INTEGER DEFAULT 0 NOT NULL"))
+                    print("[Migration] Added context_only column to conversation_jobs")
 
             trans.commit()
         except Exception as e:

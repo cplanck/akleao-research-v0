@@ -1,0 +1,73 @@
+[2025-12-12 14:40:11,244: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2025-12-12 14:40:11,246: INFO/MainProcess] mingle: searching for neighbors
+[2025-12-12 14:40:12,251: INFO/MainProcess] mingle: all alone
+[2025-12-12 14:40:12,257: INFO/MainProcess] celery@Mac.lan ready.
+[2025-12-12 14:47:03,068: WARNING/MainProcess] consumer: Connection to broker lost. Trying to re-establish the connection...
+Traceback (most recent call last):
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/celery/worker/consumer/consumer.py", line 346, in start
+    blueprint.start(self)
+    ~~~~~~~~~~~~~~~^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/celery/bootsteps.py", line 116, in start
+    step.start(parent)
+    ~~~~~~~~~~^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/celery/worker/consumer/consumer.py", line 790, in start
+    c.loop(*c.loop_args())
+    ~~~~~~^^^^^^^^^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/celery/worker/loops.py", line 97, in asynloop
+    next(loop)
+    ~~~~^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/kombu/asynchronous/hub.py", line 377, in create_loop
+    cb(*cbargs)
+    ~~^^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/kombu/transport/redis.py", line 1395, in on_readable
+    self.cycle.on_readable(fileno)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/kombu/transport/redis.py", line 579, in on_readable
+    chan.handlers[type]()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/kombu/transport/redis.py", line 931, in _receive
+    ret.append(self._receive_one(c))
+               ~~~~~~~~~~~~~~~~~^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/kombu/transport/redis.py", line 941, in _receive_one
+    response = c.parse_response()
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/client.py", line 998, in parse_response
+    response = self._execute(conn, try_read)
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/client.py", line 972, in _execute
+    response = conn.retry.call_with_retry(
+        lambda: command(*args, **kwargs),
+        lambda _: self._reconnect(conn),
+    )
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/retry.py", line 123, in call_with_retry
+    raise error
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/retry.py", line 116, in call_with_retry
+    return do()
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/client.py", line 973, in <lambda>
+    lambda: command(*args, **kwargs),
+            ~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/client.py", line 996, in try_read
+    return conn.read_response(disconnect_on_error=False, push_request=True)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/connection.py", line 1133, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/_parsers/resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/_parsers/resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/_parsers/socket.py", line 115, in readline
+    self._read_from_socket()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/redis/_parsers/socket.py", line 68, in _read_from_socket
+    raise ConnectionError(SERVER_CLOSED_CONNECTION_ERROR)
+redis.exceptions.ConnectionError: Connection closed by server.
+[2025-12-12 14:47:03,076: WARNING/MainProcess] /Users/cameronplanck/Dropbox/Development/simage-rag-v0/.venv/lib/python3.13/site-packages/celery/worker/consumer/consumer.py:397: CPendingDeprecationWarning: 
+In Celery 5.1 we introduced an optional breaking change which
+on connection loss cancels all currently executed tasks with late acknowledgement enabled.
+These tasks cannot be acknowledged as the connection is gone, and the tasks are automatically redelivered
+back to the queue. You can enable this behavior using the worker_cancel_long_running_tasks_on_connection_loss
+setting. In Celery 5.1 it is set to False by default. The setting will be set to True by default in Celery 6.0.
+
+  warnings.warn(CANCEL_TASKS_BY_DEFAULT, CPendingDeprecationWarning)
+
+[2025-12-12 14:47:03,079: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2025-12-12 14:47:03,081: INFO/MainProcess] mingle: searching for neighbors
+[2025-12-12 14:47:04,085: INFO/MainProcess] mingle: all alone
