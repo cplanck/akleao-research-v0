@@ -89,7 +89,9 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
 
     elif event_type == "tool_call":
         # Tool call sets phase to "searching"
-        tool_name = data.get("name", data.get("tool", "documents"))
+        # Agent events use "tool" field, not "name"
+        tool_name = data.get("tool", data.get("name", "documents"))
+        query = data.get("query", "")
         redis_client.hset(state_key, "current_phase", "searching")
         redis_client.hset(state_key, "current_action", f"Searching {tool_name}")
         # Append to activity log with timestamp
@@ -99,7 +101,9 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
             "id": data.get("id", str(uuid.uuid4())),
             "type": "tool_call",
             "timestamp": time.time(),
-            "name": tool_name,
+            "name": tool_name,  # Store as "name" for consistency with frontend expectations
+            "tool": tool_name,  # Also store as "tool" for consistency
+            "query": query,     # The search query or resource name
             "input": data.get("input"),
         })
         redis_client.hset(state_key, "activity", json.dumps(activity_list))
@@ -112,6 +116,8 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
             "id": str(uuid.uuid4()),
             "type": "tool_result",
             "timestamp": time.time(),
+            "tool": data.get("tool"),  # Tool name from agent event
+            "query": data.get("query", ""),  # The search query for display
             "tool_call_id": data.get("tool_call_id"),
             "found": data.get("found"),
         })
