@@ -65,6 +65,8 @@ class Project(Base):
     # Many-to-many relationship with resources via bridge table
     project_resources = relationship("ProjectResource", back_populates="project", cascade="all, delete-orphan")
     threads = relationship("Thread", back_populates="project", cascade="all, delete-orphan")
+    jobs = relationship("ConversationJob", back_populates="project", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="project", cascade="all, delete-orphan")
 
     @property
     def resources(self):
@@ -259,7 +261,7 @@ class ConversationJob(Base):
 
     # Relationships
     thread = relationship("Thread", backref="conversation_jobs")
-    project = relationship("Project", backref="conversation_jobs")
+    project = relationship("Project", back_populates="jobs")
     user_message = relationship("Message", foreign_keys=[user_message_id])
     assistant_message = relationship("Message", foreign_keys=[assistant_message_id])
 
@@ -288,7 +290,7 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
-    project = relationship("Project", backref="notifications")
+    project = relationship("Project", back_populates="notifications")
     thread = relationship("Thread", backref="notifications")
     job = relationship("ConversationJob", backref="notifications")
 
