@@ -43,6 +43,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Database (Cloud SQL via proxy or direct connection)
       - DB_HOST=${DB_HOST:-127.0.0.1}
@@ -86,6 +88,8 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     command: celery -A api.tasks worker --loglevel=info --concurrency=2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Database
       - DB_HOST=${DB_HOST:-127.0.0.1}
