@@ -635,9 +635,12 @@ def _run_incremental_migrations():
                 print(f"[Migration] Populated pinecone_namespace for {len(resources)} resources")
 
             # Migration 6: Compute content_hash for document resources that don't have it
-            docs_without_hash = conn.execute(text("""
+            # Note: PostgreSQL enums use uppercase names (DOCUMENT), SQLite uses lowercase values (document)
+            is_postgres = 'postgresql' in str(engine.url)
+            doc_type = 'DOCUMENT' if is_postgres else 'document'
+            docs_without_hash = conn.execute(text(f"""
                 SELECT id, source, type FROM resources
-                WHERE content_hash IS NULL AND type = 'document'
+                WHERE content_hash IS NULL AND type = '{doc_type}'
             """)).fetchall()
 
             hashed_count = 0
