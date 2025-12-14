@@ -5,8 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db, Project, Resource, ResourceType, ResourceStatus, ProjectResource, DataResourceMetadata, ImageResourceMetadata, User
@@ -974,9 +974,36 @@ def get_resource_file(
             media_type="application/octet-stream"
         )
 
-    # For cloud storage, redirect to signed URL
-    download_url = storage.get_download_url(resource.source, resource.filename)
-    return RedirectResponse(url=download_url)
+    # For cloud storage, stream the file directly
+    # (Signed URLs require a service account key, but we're using VM credentials)
+    content = storage.read(resource.source)
+
+    # Determine content type based on filename
+    content_type = "application/octet-stream"
+    if resource.filename:
+        ext = resource.filename.lower().split(".")[-1]
+        content_types = {
+            "pdf": "application/pdf",
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "svg": "image/svg+xml",
+            "csv": "text/csv",
+            "json": "application/json",
+            "txt": "text/plain",
+            "md": "text/markdown",
+        }
+        content_type = content_types.get(ext, "application/octet-stream")
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{resource.filename}"' if resource.filename else "inline"
+        }
+    )
 
 
 @router.delete("/{resource_id}")
