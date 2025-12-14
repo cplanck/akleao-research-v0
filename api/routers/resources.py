@@ -97,10 +97,12 @@ def index_document(resource_id: str, file_path: str):
     """Background task to index a document.
 
     Now uses resource_id as Pinecone namespace for global resource sharing.
+    Downloads file from storage (GCS or local) to a temp file for processing.
     """
     from api.database import SessionLocal
     from datetime import datetime
     import time
+    import tempfile
 
     db = SessionLocal()
     try:
@@ -113,25 +115,41 @@ def index_document(resource_id: str, file_path: str):
 
         start_time = time.time()
         try:
-            pipeline = get_pipeline()
-            # Use resource_id as Pinecone namespace for global resource sharing
-            result = pipeline.ingest(
-                file_path,
-                namespace=resource_id,  # Changed from project_id to resource_id
-                resource_id=resource_id,
-                generate_summary=True
-            )
+            # Download file from storage to temp location
+            storage = get_storage()
+            file_content = storage.read(file_path)
 
-            # Calculate duration and record timing
-            duration_ms = int((time.time() - start_time) * 1000)
-            resource.status = ResourceStatus.READY
-            resource.indexed_at = datetime.utcnow()
-            resource.indexing_duration_ms = duration_ms
-            resource.pinecone_namespace = resource_id  # Track namespace (now resource-based)
-            # Save the generated summary
-            if result.get("summary"):
-                resource.summary = result["summary"]
-            db.commit()
+            # Get file extension for temp file
+            ext = Path(file_path).suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(file_content)
+                local_path = tmp.name
+
+            try:
+                pipeline = get_pipeline()
+                # Use resource_id as Pinecone namespace for global resource sharing
+                result = pipeline.ingest(
+                    local_path,
+                    namespace=resource_id,  # Changed from project_id to resource_id
+                    resource_id=resource_id,
+                    generate_summary=True
+                )
+
+                # Calculate duration and record timing
+                duration_ms = int((time.time() - start_time) * 1000)
+                resource.status = ResourceStatus.READY
+                resource.indexed_at = datetime.utcnow()
+                resource.indexing_duration_ms = duration_ms
+                resource.pinecone_namespace = resource_id  # Track namespace (now resource-based)
+                # Save the generated summary
+                if result.get("summary"):
+                    resource.summary = result["summary"]
+                db.commit()
+            finally:
+                # Clean up temp file
+                import os as temp_os
+                if temp_os.path.exists(local_path):
+                    temp_os.remove(local_path)
         except Exception as e:
             resource.status = ResourceStatus.FAILED
             resource.error_message = str(e)
@@ -145,6 +163,7 @@ def index_data_file(resource_id: str, file_path: str):
 
     This doesn't use Pinecone - instead it extracts metadata and generates an LLM description
     that helps the agent route queries to the right data file.
+    Downloads file from storage (GCS or local) to a temp file for processing.
     """
     from api.database import SessionLocal
     from datetime import datetime
@@ -154,6 +173,7 @@ def index_data_file(resource_id: str, file_path: str):
     import os
     from pathlib import Path
     from anthropic import Anthropic
+    import tempfile
 
     db = SessionLocal()
     try:
@@ -165,26 +185,34 @@ def index_data_file(resource_id: str, file_path: str):
         db.commit()
 
         start_time = time.time()
+        local_path = None
         try:
-            # Load data based on extension
+            # Download file from storage to temp location
+            storage = get_storage()
+            file_content = storage.read(file_path)
+
+            # Get file extension for temp file
             ext = Path(file_path).suffix.lower()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(file_content)
+                local_path = tmp.name
             sheet_names = None
 
             if ext == ".csv":
-                df = pd.read_csv(file_path, nrows=10000, on_bad_lines='skip')  # Limit rows, skip malformed lines
+                df = pd.read_csv(local_path, nrows=10000, on_bad_lines='skip')  # Limit rows, skip malformed lines
             elif ext == ".tsv":
-                df = pd.read_csv(file_path, sep="\t", nrows=10000, on_bad_lines='skip')
+                df = pd.read_csv(local_path, sep="\t", nrows=10000, on_bad_lines='skip')
             elif ext in (".xlsx", ".xls"):
                 # For Excel, read first sheet but capture all sheet names
-                xlsx = pd.ExcelFile(file_path)
+                xlsx = pd.ExcelFile(local_path)
                 sheet_names = xlsx.sheet_names
-                df = pd.read_excel(file_path, sheet_name=0, nrows=10000)
+                df = pd.read_excel(local_path, sheet_name=0, nrows=10000)
             elif ext == ".json":
-                df = pd.read_json(file_path)
+                df = pd.read_json(local_path)
                 if len(df) > 10000:
                     df = df.head(10000)
             elif ext == ".parquet":
-                df = pd.read_parquet(file_path)
+                df = pd.read_parquet(local_path)
                 if len(df) > 10000:
                     df = df.head(10000)
             else:
@@ -259,6 +287,10 @@ def index_data_file(resource_id: str, file_path: str):
             resource.status = ResourceStatus.FAILED
             resource.error_message = f"{str(e)}\n{traceback.format_exc()}"
             db.commit()
+        finally:
+            # Clean up temp file
+            if local_path and os.path.exists(local_path):
+                os.remove(local_path)
     finally:
         db.close()
 
@@ -308,6 +340,7 @@ def index_image(resource_id: str, file_path: str):
 
     Uses Claude's vision capability to generate a description that helps the agent
     route queries to the right image.
+    Downloads file from storage (GCS or local) to a temp file for processing.
     """
     from api.database import SessionLocal
     from datetime import datetime
@@ -317,6 +350,7 @@ def index_image(resource_id: str, file_path: str):
     from pathlib import Path
     from PIL import Image
     from anthropic import Anthropic
+    import tempfile
 
     db = SessionLocal()
     try:
@@ -328,14 +362,25 @@ def index_image(resource_id: str, file_path: str):
         db.commit()
 
         start_time = time.time()
+        local_path = None
         try:
+            # Download file from storage to temp location
+            storage = get_storage()
+            file_content = storage.read(file_path)
+
+            # Get file extension for temp file
+            ext = Path(file_path).suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(file_content)
+                local_path = tmp.name
+
             # Get image dimensions
-            with Image.open(file_path) as img:
+            with Image.open(local_path) as img:
                 width, height = img.size
                 img_format = img.format or Path(file_path).suffix.upper().lstrip(".")
 
             # Generate vision description using Claude
-            vision_description = _generate_vision_description(file_path, resource.filename)
+            vision_description = _generate_vision_description(local_path, resource.filename)
 
             # Create metadata record
             metadata = ImageResourceMetadata(
@@ -360,6 +405,10 @@ def index_image(resource_id: str, file_path: str):
             resource.status = ResourceStatus.FAILED
             resource.error_message = f"{str(e)}\n{traceback.format_exc()}"
             db.commit()
+        finally:
+            # Clean up temp file
+            if local_path and os.path.exists(local_path):
+                os.remove(local_path)
     finally:
         db.close()
 
@@ -1023,15 +1072,35 @@ async def reindex_resource(
     db.refresh(resource)
 
     # Queue reindexing based on resource type
+    storage = get_storage()
+
     if resource.type == ResourceType.DOCUMENT:
         # For documents, use the stored file path
-        if not resource.source or not os.path.exists(resource.source):
+        if not resource.source or not storage.exists(resource.source):
             resource.status = ResourceStatus.FAILED
             resource.error_message = "Source file not found"
             db.commit()
             db.refresh(resource)
             raise HTTPException(status_code=400, detail="Source file not found for reindexing")
         background_tasks.add_task(index_document, resource.id, resource.source)
+    elif resource.type == ResourceType.DATA_FILE:
+        # For data files, use the stored file path
+        if not resource.source or not storage.exists(resource.source):
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = "Source file not found"
+            db.commit()
+            db.refresh(resource)
+            raise HTTPException(status_code=400, detail="Source file not found for reindexing")
+        background_tasks.add_task(index_data_file, resource.id, resource.source)
+    elif resource.type == ResourceType.IMAGE:
+        # For images, use the stored file path
+        if not resource.source or not storage.exists(resource.source):
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = "Source file not found"
+            db.commit()
+            db.refresh(resource)
+            raise HTTPException(status_code=400, detail="Source file not found for reindexing")
+        background_tasks.add_task(index_image, resource.id, resource.source)
     elif resource.type == ResourceType.WEBSITE:
         # For websites, re-fetch from the URL
         background_tasks.add_task(index_url, resource.id, resource.source)
