@@ -231,6 +231,7 @@ function ThreadItem({
   selectedThreadId,
   onSelect,
   onDelete,
+  onPrefetch,
   animatingThreadId,
   onAnimationComplete,
   depth = 0,
@@ -244,6 +245,7 @@ function ThreadItem({
   selectedThreadId?: string | null;
   onSelect: (threadId: string) => void;
   onDelete: (threadId: string) => void;
+  onPrefetch?: (threadId: string) => void;
   animatingThreadId?: string | null;
   onAnimationComplete?: () => void;
   depth?: number;
@@ -268,6 +270,7 @@ function ThreadItem({
         }`}
         style={{ marginLeft: `${indentLevel * 16}px` }}
         onClick={() => onSelect(thread.id)}
+        onMouseEnter={() => onPrefetch?.(thread.id)}
       >
         <div className="flex items-center gap-1 min-w-0 flex-1">
           {hasChildren ? (
@@ -315,6 +318,7 @@ function ThreadItem({
               selectedThreadId={selectedThreadId}
               onSelect={onSelect}
               onDelete={onDelete}
+              onPrefetch={onPrefetch}
               animatingThreadId={animatingThreadId}
               onAnimationComplete={onAnimationComplete}
               depth={depth + 1}
@@ -337,6 +341,7 @@ function ThreadList({
   onSelectThread,
   onDeleteThread,
   onCreateClick,
+  onPrefetchThread,
   animatingThreadId,
   onAnimationComplete,
   activeThreadIds,
@@ -346,6 +351,7 @@ function ThreadList({
   onSelectThread: (id: string) => void;
   onDeleteThread: (id: string) => void;
   onCreateClick: () => void;
+  onPrefetchThread?: (threadId: string) => void;
   animatingThreadId?: string | null;
   onAnimationComplete?: () => void;
   activeThreadIds: Set<string>;
@@ -426,6 +432,7 @@ function ThreadList({
                 selectedThreadId={selectedThread?.id}
                 onSelect={onSelectThread}
                 onDelete={onDeleteThread}
+                onPrefetch={onPrefetchThread}
                 animatingThreadId={animatingThreadId}
                 onAnimationComplete={onAnimationComplete}
                 depth={0}
@@ -454,6 +461,7 @@ export default function ProjectPage() {
   const {
     projects,
     projectsLoading,
+    projectDetailLoading,
     selectedProject,
     selectedThread,
     fetchProjects,
@@ -473,6 +481,7 @@ export default function ProjectPage() {
     buildAncestorChain,
     parseRules,
     activeThreadIds,  // Get from context - updated via unified WebSocket
+    prefetchMessages,
   } = useProject();
 
   const [newProjectName, setNewProjectName] = useState("");
@@ -539,7 +548,15 @@ export default function ProjectPage() {
     setAnimatingThreadId(null);
   };
 
-  if (projectsLoading) {
+  // Prefetch messages when hovering over a thread
+  const handlePrefetchThread = useCallback((threadId: string) => {
+    if (selectedProject) {
+      prefetchMessages(selectedProject.id, threadId);
+    }
+  }, [selectedProject, prefetchMessages]);
+
+  // Show loading until both projects list and specific project are loaded
+  if (projectsLoading || projectDetailLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <p className="text-muted-foreground">Loading...</p>
@@ -550,7 +567,7 @@ export default function ProjectPage() {
   // Mobile layout
   if (isMobile) {
     return (
-      <div className="h-screen bg-background flex flex-col overflow-hidden">
+      <div className="h-dvh bg-background flex flex-col overflow-hidden">
         {/* Mobile header */}
         <div className="flex-shrink-0 border-b px-3 py-2 flex items-center justify-between bg-background">
           <Sheet open={threadSheetOpen} onOpenChange={setThreadSheetOpen}>
@@ -599,6 +616,7 @@ export default function ProjectPage() {
                   onSelectThread={handleSelectThread}
                   onDeleteThread={handleDeleteThreadWithConfirm}
                   onCreateClick={handleCreateThreadAndNavigate}
+                  onPrefetchThread={handlePrefetchThread}
                   animatingThreadId={animatingThreadId}
                   onAnimationComplete={handleTitleAnimationComplete}
                   activeThreadIds={activeThreadIds}
@@ -779,7 +797,7 @@ export default function ProjectPage() {
 
   // Desktop layout
   return (
-    <div className="h-screen bg-background overflow-hidden">
+    <div className="h-dvh bg-background overflow-hidden">
       <ResizablePanelGroup direction="horizontal" className="h-full" autoSaveId="project-layout">
         {/* Left sidebar - Project selector and Threads */}
         <ResizablePanel defaultSize={15} minSize={10} maxSize={25}>
@@ -829,6 +847,7 @@ export default function ProjectPage() {
                 onSelectThread={handleSelectThread}
                 onDeleteThread={handleDeleteThreadWithConfirm}
                 onCreateClick={handleCreateThreadAndNavigate}
+                onPrefetchThread={handlePrefetchThread}
                 animatingThreadId={animatingThreadId}
                 onAnimationComplete={handleTitleAnimationComplete}
                 activeThreadIds={activeThreadIds}
@@ -913,7 +932,7 @@ export default function ProjectPage() {
         <ResizableHandle withHandle />
 
         {/* Right sidebar - Resources */}
-        <ResizablePanel defaultSize={25} minSize={15} maxSize={40}>
+        <ResizablePanel defaultSize={18} minSize={15} maxSize={40}>
           <div className="h-full border-l flex flex-col bg-background">
             <div className="flex-1 flex flex-col overflow-hidden">
               {selectedProject ? (

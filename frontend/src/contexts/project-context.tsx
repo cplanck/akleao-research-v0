@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, ReactNode } from "react";
 import {
   Project,
   ProjectDetail,
   Thread,
+  Message,
   listProjects,
   getProject,
   createProject,
@@ -12,6 +13,7 @@ import {
   updateProject,
   createThread,
   deleteThread,
+  listMessages,
 } from "@/lib/api";
 import { useAppWebSocket } from "@/contexts/app-websocket-context";
 import { JobEvent, JobState } from "@/lib/app-websocket";
@@ -20,6 +22,7 @@ interface ProjectContextType {
   // Projects list
   projects: Project[];
   projectsLoading: boolean;
+  projectDetailLoading: boolean;  // True when loading a specific project
 
   // Selected project
   selectedProject: ProjectDetail | null;
@@ -53,6 +56,12 @@ interface ProjectContextType {
   // Utility
   buildAncestorChain: (thread: Thread | null) => Array<{id: string; title: string}>;
   parseRules: (instructions: string | null) => string[];
+
+  // Message cache (for faster thread switching)
+  getCachedMessages: (threadId: string) => Message[] | null;
+  setCachedMessages: (threadId: string, messages: Message[]) => void;
+  invalidateMessageCache: (threadId: string) => void;
+  prefetchMessages: (projectId: string, threadId: string) => void;
 }
 
 const ProjectContext = createContext<ProjectContextType | null>(null);
@@ -87,8 +96,13 @@ export function ProjectProvider({
   const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
   const [selectedThread, setSelectedThread] = useState<Thread | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectDetailLoading, setProjectDetailLoading] = useState(!!initialProjectId);  // True if we have an initial project to load
   const [animatingThreadId, setAnimatingThreadId] = useState<string | null>(null);
   const [findingsRefreshTrigger, setFindingsRefreshTrigger] = useState(0);
+
+  // Message cache for faster thread switching
+  // Map<threadId, Message[]>
+  const messageCacheRef = useRef<Map<string, Message[]>>(new Map());
 
   // Get WebSocket state from app-level context
   const {
@@ -267,17 +281,72 @@ export function ProjectProvider({
     appSubscribeToThread(projectId, threadId);
   }, [appSubscribeToThread]);
 
+  // Message cache functions
+  const getCachedMessages = useCallback((threadId: string): Message[] | null => {
+    // Don't return cache if thread has an active job (need real-time streaming)
+    if (hasActiveJob(selectedProject?.id || "", threadId)) {
+      return null;
+    }
+    return messageCacheRef.current.get(threadId) || null;
+  }, [selectedProject?.id, hasActiveJob]);
+
+  const setCachedMessages = useCallback((threadId: string, messages: Message[]) => {
+    messageCacheRef.current.set(threadId, messages);
+  }, []);
+
+  const invalidateMessageCache = useCallback((threadId: string) => {
+    messageCacheRef.current.delete(threadId);
+  }, []);
+
+  const prefetchMessages = useCallback((projectId: string, threadId: string) => {
+    // Don't prefetch if already cached or has active job
+    if (messageCacheRef.current.has(threadId)) return;
+    if (hasActiveJob(projectId, threadId)) return;
+
+    // Fetch in background, don't await
+    listMessages(projectId, threadId)
+      .then((msgs) => {
+        // Only cache if thread still doesn't have an active job
+        if (!hasActiveJob(projectId, threadId)) {
+          messageCacheRef.current.set(threadId, msgs);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to prefetch messages:", err);
+      });
+  }, [hasActiveJob]);
+
+  // Invalidate cache when a job completes on a thread
+  useEffect(() => {
+    if (!currentJobEvent) return;
+    if (currentJobEvent.type === "done" && currentJobEvent.thread_id) {
+      invalidateMessageCache(currentJobEvent.thread_id);
+    }
+  }, [currentJobEvent, invalidateMessageCache]);
+
   // Initialize with URL params if provided
   useEffect(() => {
     const init = async () => {
-      const projectList = await fetchProjects();
+      // Fetch projects and project detail in parallel if we have an initial project
+      const projectsPromise = fetchProjects();
 
       if (initialProjectId) {
-        await fetchProjectDetail(initialProjectId, !initialThreadId);
-        if (initialThreadId) {
-          selectThread(initialThreadId);
+        // Fetch both in parallel
+        const [, projectDetail] = await Promise.all([
+          projectsPromise,
+          fetchProjectDetail(initialProjectId, !initialThreadId),
+        ]);
+
+        // Select thread directly from returned data (don't rely on state which is async)
+        if (initialThreadId && projectDetail) {
+          const thread = projectDetail.threads.find(t => t.id === initialThreadId);
+          if (thread) {
+            setSelectedThread(thread);
+          }
         }
-      } else if (projectList.length > 0 && !selectedProject) {
+        setProjectDetailLoading(false);
+      } else {
+        await projectsPromise;
         // No initial project specified, don't auto-select
         // This allows the project picker to show
       }
@@ -305,6 +374,7 @@ export function ProjectProvider({
     <ProjectContext.Provider value={{
       projects,
       projectsLoading,
+      projectDetailLoading,
       selectedProject,
       selectedThread,
       fetchProjects,
@@ -328,6 +398,10 @@ export function ProjectProvider({
       subscribeToThread,
       buildAncestorChain,
       parseRules,
+      getCachedMessages,
+      setCachedMessages,
+      invalidateMessageCache,
+      prefetchMessages,
     }}>
       {children}
     </ProjectContext.Provider>

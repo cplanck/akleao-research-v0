@@ -552,8 +552,8 @@ function useIsMobile(breakpoint: number = 768) {
 
 export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId, contextText, ancestorThreads = [], onResourceAdded, onThreadTitleGenerated, onNavigateToThread, resources = [], rules = [], onRulesChange, isRulesDialogOpen: externalIsRulesDialogOpen, onRulesDialogOpenChange, onFindingSaved }: ChatInterfaceProps) {
   const isMobile = useIsMobile();
-  // Get WebSocket state from context
-  const { subscribeToThread, currentJobState, currentJobEvent } = useProject();
+  // Get WebSocket state and cache functions from context
+  const { subscribeToThread, currentJobState, currentJobEvent, getCachedMessages, setCachedMessages, invalidateMessageCache } = useProject();
 
   // ============================================
   // STATE: What we maintain locally
@@ -742,12 +742,30 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   // Track if messages have been loaded for this thread
   const [messagesLoaded, setMessagesLoaded] = useState(false);
 
+  // Helper to transform API messages to local format
+  const transformMessages = useCallback((msgs: { id: string; role: "user" | "assistant"; content: string; sources?: SourceInfo[] | null; tool_calls?: ToolCallRecord[] | null; child_threads?: ChildThreadInfo[] | null }[]) => {
+    return msgs.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      sources: m.sources || undefined,
+      toolCalls: m.tool_calls || undefined,
+      isQuestion: m.role === "assistant" ? isQuestionMessage(m.content) : false,
+      childThreads: m.child_threads || undefined,
+    }));
+  }, []);
+
+  // Store cache functions in refs to avoid triggering effect re-runs
+  const getCachedMessagesRef = useRef(getCachedMessages);
+  const setCachedMessagesRef = useRef(setCachedMessages);
+  getCachedMessagesRef.current = getCachedMessages;
+  setCachedMessagesRef.current = setCachedMessages;
+
   // Load messages when thread changes
   useEffect(() => {
     setInput("");
     setShowSources(null);
     setShowToolCalls(null);
-    setMessagesLoaded(false);
     hasGeneratedTitleRef.current = false;  // Reset title generation tracking
     streamingRef.current = "";
     sourcesRef.current = [];
@@ -758,30 +776,41 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       inputRef.current?.focus();
     }, 100);
 
-    listMessages(projectId, threadId)
-      .then((msgs) => {
-        setMessages(
-          msgs.map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            sources: m.sources || undefined,
-            toolCalls: m.tool_calls || undefined,
-            isQuestion: m.role === "assistant" ? isQuestionMessage(m.content) : false,
-            childThreads: m.child_threads || undefined,
-          }))
-        );
-        setMessagesLoaded(true);
-      })
-      .catch((err) => {
-        console.error("Failed to load messages:", err);
-        setMessages([]);
-        setMessagesLoaded(true);
-      });
+    // Check cache first for instant display (use ref to avoid dep array issues)
+    const cachedMessages = getCachedMessagesRef.current(threadId);
+    if (cachedMessages) {
+      // Show cached messages immediately
+      setMessages(transformMessages(cachedMessages));
+      setMessagesLoaded(true);
+
+      // Still fetch fresh data in background (stale-while-revalidate)
+      listMessages(projectId, threadId)
+        .then((msgs) => {
+          setMessages(transformMessages(msgs));
+          setCachedMessagesRef.current(threadId, msgs);
+        })
+        .catch((err) => {
+          console.error("Failed to refresh messages:", err);
+        });
+    } else {
+      // No cache - show loading state and fetch
+      setMessagesLoaded(false);
+      listMessages(projectId, threadId)
+        .then((msgs) => {
+          setMessages(transformMessages(msgs));
+          setCachedMessagesRef.current(threadId, msgs);
+          setMessagesLoaded(true);
+        })
+        .catch((err) => {
+          console.error("Failed to load messages:", err);
+          setMessages([]);
+          setMessagesLoaded(true);
+        });
+    }
 
     // Subscribe to this thread to get agent state
     subscribeToThread(projectId, threadId);
-  }, [projectId, threadId, subscribeToThread]);
+  }, [projectId, threadId, subscribeToThread, transformMessages]);
 
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
@@ -884,20 +913,11 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         // This prevents a late "done" from job 1 clearing state for job 2
         if (!currentJobId) return;
 
-        // Reload messages from DB to get the final saved message
+        // Reload messages from DB to get the final saved message and update cache
         listMessages(projectId, threadId)
           .then((msgs) => {
-            setMessages(
-              msgs.map((m) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-                sources: m.sources || undefined,
-                toolCalls: m.tool_calls || undefined,
-                isQuestion: m.role === "assistant" ? isQuestionMessage(m.content) : false,
-                childThreads: m.child_threads || undefined,
-              }))
-            );
+            setMessages(transformMessages(msgs));
+            setCachedMessagesRef.current(threadId, msgs);
           })
           .catch((err) => {
             console.error("Failed to reload messages:", err);
@@ -925,7 +945,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         break;
       }
     }
-  }, [currentJobEvent, projectId, threadId]);
+  }, [currentJobEvent, projectId, threadId, transformMessages]);
 
   // Check for active job on mount and ensure it's running
   // State is derived from currentJobState via WebSocket - this just ensures job is started
@@ -1028,6 +1048,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     setInput("");
     setTokenCount(0);
 
+    // Invalidate cache since we're adding new messages
+    invalidateMessageCache(threadId);
+
     try {
       // Create job - this saves the user message and enqueues Celery task
       const job = await createJob(projectId, threadId, question, contextOnly, true);
@@ -1061,7 +1084,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       toast.error("Failed to send message. Please try again.");
       currentJobIdRef.current = null;
     }
-  }, [input, isLoading, projectId, threadId, messages, contextOnly, threadTitle, onThreadTitleGenerated, subscribeToThread]);
+  }, [input, isLoading, projectId, threadId, messages, contextOnly, threadTitle, onThreadTitleGenerated, subscribeToThread, invalidateMessageCache]);
 
   return (
     <div className="relative h-full flex flex-col" ref={chatContainerRef}>
@@ -1151,7 +1174,12 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       {/* Scrollable messages area */}
       <div className="flex-1 overflow-y-auto p-3 md:p-4 chat-scrollbar" ref={scrollRef}>
         <div className="space-y-3 md:space-y-4 pb-4">
-          {messages.length === 0 ? (
+          {!messagesLoaded ? (
+            // Show loading state while messages are being fetched
+            <div className="text-center text-muted-foreground py-12">
+              <p>Loading messages...</p>
+            </div>
+          ) : messages.length === 0 ? (
             <div className="text-center text-muted-foreground py-12">
               <p>No messages yet.</p>
               <p className="text-sm">Upload some documents and ask a question!</p>
@@ -1404,7 +1432,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const lastMessage = messages[messages.length - 1];
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
-          <div className="flex-shrink-0 p-3 md:p-4 bg-background">
+          <div className="flex-shrink-0 p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background">
               {/* Floating input container */}
               <div className="border border-border bg-card rounded-lg shadow-sm overflow-hidden">
                 {/* Input row */}
