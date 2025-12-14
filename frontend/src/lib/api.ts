@@ -1,11 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-// Debug: log the API_BASE to see what value is actually being used
-if (typeof window !== "undefined") {
-  console.log("[API] API_BASE:", API_BASE);
-  console.log("[API] NEXT_PUBLIC_API_URL:", process.env.NEXT_PUBLIC_API_URL);
-}
-
 // WebSocket base URL (convert http to ws)
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 
@@ -685,7 +679,6 @@ export async function createFinding(
   finding: FindingCreate
 ): Promise<Finding> {
   const url = `${API_BASE}/projects/${projectId}/findings`;
-  console.log("[API] createFinding URL:", url);
   const res = await fetchWithAuth(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1272,4 +1265,4 @@ export function connectToJobStream(
     }
   };
 }
-// Build timestamp: Sun Dec 14 13:19:24 MST 2025
+// Build timestamp: Sun Dec 14 13:30:00 MST 2025
