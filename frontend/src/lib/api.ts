@@ -1,4 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Hardcode production URL as fallback since env var isn't being picked up correctly
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "akleao.com"
+    ? "https://api.akleao.com"
+    : "http://localhost:8000");
 
 // WebSocket base URL (convert http to ws)
 const WS_BASE = API_BASE.replace(/^http/, "ws");
@@ -1265,4 +1269,4 @@ export function connectToJobStream(
     }
   };
 }
-// Build timestamp: Sun Dec 14 13:30:00 MST 2025
+// Build timestamp: Sun Dec 14 14:00:00 MST 2025 - hardcode production fallback
