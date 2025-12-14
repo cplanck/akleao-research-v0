@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from api.database import get_db, Project, Thread, Message
-from api.schemas import MessageCreate, MessageResponse, SourceInfo, ChildThreadInfo
+from api.schemas import MessageCreate, MessageResponse, SourceInfo, ChildThreadInfo, ToolCallInfo
 
 router = APIRouter(tags=["messages"])
 
@@ -56,12 +56,18 @@ def list_messages(
         sources = None
         if msg.sources:
             sources = [SourceInfo(**s) for s in json.loads(msg.sources)]
+
+        tool_calls = None
+        if msg.tool_calls:
+            tool_calls = [ToolCallInfo(**tc) for tc in json.loads(msg.tool_calls)]
+
         result.append(MessageResponse(
             id=msg.id,
             thread_id=msg.thread_id,
             role=msg.role,
             content=msg.content,
             sources=sources,
+            tool_calls=tool_calls,
             child_threads=children_by_message.get(msg.id),
             created_at=msg.created_at
         ))

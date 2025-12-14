@@ -243,7 +243,14 @@ Keep the total under 150 words."""
         }]
     )
 
-    return {"summary": response.content[0].text}
+    summary = response.content[0].text
+
+    # Store summary in project
+    project.findings_summary = summary
+    project.findings_summary_updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"summary": summary}
 
 
 @router.post("/email")

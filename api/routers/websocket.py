@@ -265,10 +265,15 @@ async def project_stream(websocket: WebSocket, project_id: str):
                 if job_msg and job_msg["type"] == "message":
                     try:
                         event = json.loads(job_msg["data"])
-                        # Wrap job events so frontend knows it's for the subscribed thread
+                        # Flatten event data so frontend receives tool, query, found at top level
+                        event_data = event.get("data", {})
                         await websocket.send_json({
                             "type": "job_event",
-                            "data": event
+                            "data": {
+                                "type": event.get("type"),
+                                **event_data,  # Spread the nested data (tool, query, found, etc.)
+                                "thread_id": subscribed_thread_id,
+                            }
                         })
                         # If job is done/error, unsubscribe from job channel
                         if event.get("type") in ("done", "error"):
@@ -546,10 +551,13 @@ async def app_stream(websocket: WebSocket):
                         event = json.loads(job_msg["data"])
                         # Forward job events for the subscribed thread
                         # Include job_id so client can verify this event is for the right job
+                        # Flatten the event data so frontend receives tool, query, found at top level
+                        event_data = event.get("data", {})
                         await websocket.send_json({
                             "type": "job_event",
                             "data": {
-                                **event,
+                                "type": event.get("type"),
+                                **event_data,  # Spread the nested data (tool, query, found, etc.)
                                 "job_id": subscribed_job_id,
                                 "thread_id": subscribed_thread_id,
                             }

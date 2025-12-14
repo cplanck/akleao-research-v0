@@ -24,6 +24,8 @@ class ProjectResponse(BaseModel):
     last_thread_id: str | None = None
     resource_count: int = 0
     thread_count: int = 0
+    findings_summary: str | None = None
+    findings_summary_updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -168,12 +170,24 @@ class ChildThreadInfo(BaseModel):
     context_text: str | None = None
 
 
+class ToolCallInfo(BaseModel):
+    """Info about a tool call made during message generation."""
+    id: str
+    tool: str
+    query: str | None = None
+    timestamp: float | None = None
+    status: str  # "running", "complete", "empty", "failed"
+    found: int | None = None
+    duration_ms: int | None = None
+
+
 class MessageResponse(BaseModel):
     id: str
     thread_id: str
     role: MessageRole
     content: str
     sources: list[SourceInfo] | None = None
+    tool_calls: list[ToolCallInfo] | None = None  # Tool calls made during this response
     child_threads: list[ChildThreadInfo] | None = None  # Threads spawned from this message
     created_at: datetime
 

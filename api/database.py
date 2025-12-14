@@ -61,6 +61,8 @@ class Project(Base):
     system_instructions = Column(Text, nullable=True)  # Custom instructions for the AI
     created_at = Column(DateTime, default=datetime.utcnow)
     last_thread_id = Column(String, nullable=True)  # Last active thread for UI restoration
+    findings_summary = Column(Text, nullable=True)  # AI-generated summary of findings
+    findings_summary_updated_at = Column(DateTime, nullable=True)  # When summary was last generated
 
     # Many-to-many relationship with resources via bridge table
     project_resources = relationship("ProjectResource", back_populates="project", cascade="all, delete-orphan")
@@ -140,6 +142,7 @@ class Message(Base):
     role = Column(Enum(MessageRole), nullable=False)
     content = Column(Text, nullable=False)
     sources = Column(Text, nullable=True)  # JSON string for source info
+    tool_calls = Column(Text, nullable=True)  # JSON string for tool call history
     created_at = Column(DateTime, default=datetime.utcnow)
 
     thread = relationship("Thread", back_populates="messages", foreign_keys=[thread_id])
@@ -686,6 +689,23 @@ def _run_incremental_migrations():
                 if "context_only" not in job_columns:
                     conn.execute(text("ALTER TABLE conversation_jobs ADD COLUMN context_only INTEGER DEFAULT 0 NOT NULL"))
                     print("[Migration] Added context_only column to conversation_jobs")
+
+            # Migration 14: Add tool_calls column to messages for persisting tool call history
+            if "messages" in existing_tables:
+                message_columns = [col["name"] for col in inspector.get_columns("messages")]
+                if "tool_calls" not in message_columns:
+                    conn.execute(text("ALTER TABLE messages ADD COLUMN tool_calls TEXT"))
+                    print("[Migration] Added tool_calls column to messages")
+
+            # Migration 15: Add findings_summary columns to projects
+            if "projects" in existing_tables:
+                project_columns = [col["name"] for col in inspector.get_columns("projects")]
+                if "findings_summary" not in project_columns:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN findings_summary TEXT"))
+                    print("[Migration] Added findings_summary column to projects")
+                if "findings_summary_updated_at" not in project_columns:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN findings_summary_updated_at DATETIME"))
+                    print("[Migration] Added findings_summary_updated_at column to projects")
 
             trans.commit()
         except Exception as e:

@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 
-from api.tasks import celery_app, publish_job_event
+from api.tasks import celery_app, publish_job_event, get_job_state
 from api.routers.websocket import publish_project_job_update, publish_global_job_update
 from api.database import (
     SessionLocal, ConversationJob, Message, Notification, Thread, Project,
@@ -306,13 +306,58 @@ def process_conversation_task(self, job_id: str):
                 publish_job_event(job_id, "error", {"message": event.data.get("message", "Unknown error")})
                 raise Exception(event.data.get("message", "Unknown error"))
 
+        # Serialize tool calls from Redis activity log
+        tool_calls_json = None
+        try:
+            final_state = get_job_state(job_id)
+            activity = final_state.get("activity", [])
+            if activity:
+                # Process activity into structured tool call records
+                tool_calls = []
+                tool_call_map = {}  # Map tool names to their in-progress data
+
+                for item in activity:
+                    if item.get("type") == "tool_call":
+                        tool_name = item.get("name") or item.get("tool")
+                        if tool_name:
+                            tool_call_map[tool_name] = {
+                                "id": item.get("id", ""),
+                                "tool": tool_name,
+                                "query": item.get("query", ""),
+                                "timestamp": item.get("timestamp", 0),
+                                "status": "running",
+                            }
+
+                    elif item.get("type") == "tool_result":
+                        tool_name = item.get("tool")
+                        if tool_name and tool_name in tool_call_map:
+                            call_data = tool_call_map[tool_name]
+                            found_count = item.get("found", 0)
+                            call_data["status"] = "complete" if found_count > 0 else "empty"
+                            call_data["found"] = found_count
+                            if call_data["timestamp"]:
+                                call_data["duration_ms"] = int((item.get("timestamp", 0) - call_data["timestamp"]) * 1000)
+                            tool_calls.append(call_data)
+                            del tool_call_map[tool_name]
+
+                # Add any tool calls that didn't get results
+                for call_data in tool_call_map.values():
+                    call_data["status"] = "failed"
+                    tool_calls.append(call_data)
+
+                if tool_calls:
+                    tool_calls_json = json.dumps(tool_calls)
+        except Exception as e:
+            print(f"[ConversationTask] Failed to serialize tool calls: {e}")
+
         # Save final assistant message
         sources_for_message = json.dumps(all_sources) if all_sources else None
         assistant_message = Message(
             thread_id=thread.id,
             role=MessageRole.ASSISTANT,
             content=accumulated_content,
-            sources=sources_for_message
+            sources=sources_for_message,
+            tool_calls=tool_calls_json
         )
         db.add(assistant_message)
         db.commit()
