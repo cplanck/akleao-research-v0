@@ -19,7 +19,7 @@ WORKDIR /app
 # Install Python dependencies
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e . && \
-    pip install --no-cache-dir celery redis tavily-python pillow pandas openpyxl websockets
+    pip install --no-cache-dir celery redis tavily-python pillow pandas openpyxl websockets email-validator
 
 # Copy application code
 COPY api/ ./api/

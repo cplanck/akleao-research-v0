@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from api.tasks import celery_app, publish_job_event, get_job_state
 from api.routers.websocket import publish_project_job_update, publish_global_job_update
 from api.database import (
-    SessionLocal, ConversationJob, Message, Notification, Thread, Project,
+    SessionLocal, ConversationJob, Message, Notification, Thread, Project, Finding,
     JobStatus, NotificationType, MessageRole
 )
 from rag.embeddings import Embedder
@@ -241,6 +241,20 @@ def process_conversation_task(self, job_id: str):
         # Initialize agent
         agent = get_agent()
 
+        # Create save_finding callback with access to db context
+        def save_finding_callback(content: str, note: str | None) -> dict:
+            """Save a finding to the database."""
+            db_finding = Finding(
+                project_id=job.project_id,
+                thread_id=job.thread_id,
+                content=content,
+                note=note
+            )
+            db.add(db_finding)
+            db.commit()
+            db.refresh(db_finding)
+            return {"id": db_finding.id, "content": db_finding.content}
+
         # Process conversation
         accumulated_content = ""
         all_sources = []
@@ -256,6 +270,7 @@ def process_conversation_task(self, job_id: str):
             resources=resources,
             system_instructions=combined_instructions if combined_instructions else None,
             context_only=bool(job.context_only),
+            save_finding_callback=save_finding_callback,
             has_data_files=has_data_files,
             has_images=has_images,
         ):

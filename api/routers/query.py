@@ -8,8 +8,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
-from api.database import get_db, Project, Thread, Message
+from api.database import get_db, Project, Thread, Message, User
 from api.schemas import QueryRequest, QueryResponse, SourceInfo, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult
+from api.middleware.auth import get_current_user
 from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
 from rag.retriever import Retriever
@@ -193,11 +194,15 @@ def query_thread(
     project_id: str,
     thread_id: str,
     request: QueryRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Query documents in a project using the agent (within a thread context)."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and user owns it
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -284,15 +289,19 @@ def query_thread_stream(
     thread_id: str,
     request: QueryRequest,
     agent_version: Optional[str] = Query(default=None, description="Agent version: 'v1' or 'v2'"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Query with streaming response using the agent.
 
     Args:
         agent_version: Optional agent version for A/B testing ("v1" or "v2")
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and user owns it
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -496,11 +505,15 @@ def get_retriever():
 def semantic_search(
     project_id: str,
     request: SemanticSearchRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Perform semantic search across project documents using RAG."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and user owns it
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

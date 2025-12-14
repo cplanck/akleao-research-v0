@@ -8,8 +8,9 @@ from pydantic import BaseModel
 
 from api.database import (
     get_db, Project, Thread, Message, ConversationJob,
-    JobStatus, MessageRole
+    JobStatus, MessageRole, User
 )
+from api.middleware.auth import get_current_user
 from api.tasks.conversation import process_conversation_task
 from api.routers.websocket import publish_global_job_update, publish_project_job_update
 
@@ -73,7 +74,8 @@ class ActiveThreadJob(BaseModel):
 @router.get("/projects/{project_id}/jobs/active", response_model=list[ActiveThreadJob])
 def get_project_active_jobs(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Get all active (pending/running) jobs for a project.
@@ -81,8 +83,11 @@ def get_project_active_jobs(
     Returns a list of thread IDs that have active jobs.
     This is used for showing indicators in the thread sidebar.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -107,7 +112,8 @@ def create_job(
     project_id: str,
     thread_id: str,
     request: JobCreateRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Create a new conversation job.
@@ -121,8 +127,11 @@ def create_job(
 
     The frontend can then poll for job status to see progress.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -175,7 +184,8 @@ def create_job(
 def get_active_job(
     project_id: str,
     thread_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Get the currently active (pending/running) job for a thread.
@@ -183,8 +193,11 @@ def get_active_job(
     Returns null if there's no active job. This is useful when the user
     returns to a thread to check if there's work in progress.
     """
-    # Verify project and thread
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -218,7 +231,8 @@ def get_job(
     project_id: str,
     thread_id: str,
     job_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Get job status and partial response.
@@ -226,8 +240,11 @@ def get_job(
     This endpoint also updates `last_polled_at` to track whether the user
     is actively watching the job (used for notification logic).
     """
-    # Verify project and thread
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -259,7 +276,8 @@ def start_job(
     project_id: str,
     thread_id: str,
     job_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Start a pending job via Celery.
@@ -313,7 +331,8 @@ def update_job_progress(
     thread_id: str,
     job_id: str,
     request: JobUpdateProgressRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Update job progress (partial response) before handing off to Celery.
@@ -342,7 +361,8 @@ def complete_job(
     thread_id: str,
     job_id: str,
     request: JobCompleteRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Mark a job as completed after SSE streaming finishes successfully.
@@ -379,15 +399,19 @@ def cancel_job(
     project_id: str,
     thread_id: str,
     job_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Cancel a pending or running job.
 
     This sets the job status to CANCELLED and revokes the Celery task.
     """
-    # Verify project and thread
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

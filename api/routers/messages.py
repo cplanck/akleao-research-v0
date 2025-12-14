@@ -5,7 +5,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.database import get_db, Project, Thread, Message
+from api.database import get_db, Project, Thread, Message, User
+from api.middleware.auth import get_current_user
 from api.schemas import MessageCreate, MessageResponse, SourceInfo, ChildThreadInfo, ToolCallInfo
 
 router = APIRouter(tags=["messages"])
@@ -15,9 +16,18 @@ router = APIRouter(tags=["messages"])
 def list_messages(
     project_id: str,
     thread_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Get all messages for a thread."""
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,
@@ -79,9 +89,18 @@ def create_message(
     project_id: str,
     thread_id: str,
     message: MessageCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Create a new message in a thread."""
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,
@@ -122,9 +141,18 @@ def create_message(
 def clear_messages(
     project_id: str,
     thread_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Clear all messages in a thread."""
+    # Verify project belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,

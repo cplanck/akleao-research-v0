@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from api.database import get_db, Project, Notification
+from api.database import get_db, Project, Notification, User
+from api.middleware.auth import get_current_user
 
 router = APIRouter(tags=["notifications"])
 
@@ -50,7 +51,8 @@ def list_notifications(
     project_id: str,
     unread_only: bool = False,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     List notifications for a project.
@@ -60,8 +62,11 @@ def list_notifications(
         unread_only: If True, only return unread notifications
         limit: Maximum number of notifications to return (default 50)
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -80,15 +85,19 @@ def list_notifications(
 @router.get("/projects/{project_id}/notifications/unread-count", response_model=UnreadCountResponse)
 def get_unread_count(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Get the count of unread notifications for a project.
 
     This is used to display the badge number on the notification bell.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -104,13 +113,17 @@ def get_unread_count(
 def mark_notification_read(
     project_id: str,
     notification_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Mark a single notification as read.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -133,13 +146,17 @@ def mark_notification_read(
 @router.post("/projects/{project_id}/notifications/mark-all-read")
 def mark_all_read(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Mark all notifications for a project as read.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -160,13 +177,17 @@ def mark_all_read(
 def delete_notification(
     project_id: str,
     notification_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Delete a notification.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 
 from sqlalchemy import func
 
-from api.database import get_db, Project, Thread, Message
+from api.database import get_db, Project, Thread, Message, User
 from api.schemas import ThreadCreate, ThreadUpdate, ThreadResponse, ThreadDetail, MessageResponse
+from api.middleware.auth import get_current_user
 
 
 def get_child_count(db: Session, thread_id: str) -> int:
@@ -78,13 +79,17 @@ Examples:
 def create_thread(
     project_id: str,
     thread: ThreadCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Create a new thread in a project.
 
     Can create child threads by providing parent_thread_id and parent_message_id.
     """
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -137,9 +142,16 @@ def create_thread(
 
 
 @router.get("/projects/{project_id}/threads", response_model=list[ThreadResponse])
-def list_threads(project_id: str, db: Session = Depends(get_db)):
+def list_threads(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """List all active threads in a project."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -168,9 +180,18 @@ def list_threads(project_id: str, db: Session = Depends(get_db)):
 def get_thread(
     project_id: str,
     thread_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Get thread details including messages."""
+    # Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,
@@ -180,7 +201,6 @@ def get_thread(
         raise HTTPException(status_code=404, detail="Thread not found")
 
     # Update project's last_thread_id when thread is accessed
-    project = db.query(Project).filter(Project.id == project_id).first()
     if project:
         project.last_thread_id = thread_id
         db.commit()
@@ -213,9 +233,18 @@ def update_thread(
     project_id: str,
     thread_id: str,
     update: ThreadUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Update thread title."""
+    # Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,
@@ -247,9 +276,18 @@ def update_thread(
 def delete_thread(
     project_id: str,
     thread_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Soft delete a thread."""
+    # Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,
@@ -263,7 +301,6 @@ def delete_thread(
     db.commit()
 
     # If this was the project's last_thread_id, clear it or set to another thread
-    project = db.query(Project).filter(Project.id == project_id).first()
     if project and project.last_thread_id == thread_id:
         # Find another active thread
         other_thread = db.query(Thread).filter(
@@ -282,12 +319,21 @@ def auto_generate_title(
     thread_id: str,
     request: GenerateTitleRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Generate and set a thread title based on the first user message.
 
     Uses AI to create a short, contextual title from the message content.
     """
+    # Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     thread = db.query(Thread).filter(
         Thread.id == thread_id,
         Thread.project_id == project_id,

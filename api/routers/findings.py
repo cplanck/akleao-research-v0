@@ -3,7 +3,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from api.database import get_db, Finding, Project, Thread, Message
+from api.database import get_db, Finding, Project, Thread, Message, User
+from api.middleware.auth import get_current_user
 from api.schemas import FindingCreate, FindingUpdate, FindingResponse
 
 router = APIRouter(prefix="/projects/{project_id}/findings", tags=["findings"])
@@ -13,11 +14,15 @@ router = APIRouter(prefix="/projects/{project_id}/findings", tags=["findings"])
 def list_findings(
     project_id: str,
     thread_id: str | None = Query(None, description="Filter by thread ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """List findings for a project, optionally filtered by thread."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -34,7 +39,8 @@ def list_findings(
 def get_finding(
     project_id: str,
     finding_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Get a specific finding."""
     finding = db.query(Finding).filter(
@@ -52,11 +58,15 @@ def get_finding(
 def create_finding(
     project_id: str,
     finding: FindingCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Create a new finding."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -95,7 +105,8 @@ def update_finding(
     project_id: str,
     finding_id: str,
     updates: FindingUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Update a finding's note."""
     finding = db.query(Finding).filter(
@@ -119,7 +130,8 @@ def update_finding(
 def delete_finding(
     project_id: str,
     finding_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Delete a finding."""
     finding = db.query(Finding).filter(
@@ -139,15 +151,19 @@ def delete_finding(
 @router.post("/summarize")
 def summarize_findings(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Summarize all findings for a project using AI."""
     import os
     from datetime import datetime
     import anthropic
 
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -258,7 +274,8 @@ def email_findings(
     project_id: str,
     email: str = Query(..., description="Recipient email address"),
     content: str | None = Query(None, description="Optional custom content (e.g., AI summary) to send instead of raw findings"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Email findings to a specified address using Mailgun."""
     import os
@@ -266,8 +283,11 @@ def email_findings(
     import re
     from datetime import datetime
 
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

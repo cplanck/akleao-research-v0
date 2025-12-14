@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Backgro
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from api.database import get_db, Project, Resource, ResourceType, ResourceStatus, ProjectResource, DataResourceMetadata, ImageResourceMetadata
+from api.database import get_db, Project, Resource, ResourceType, ResourceStatus, ProjectResource, DataResourceMetadata, ImageResourceMetadata, User
+from api.middleware.auth import get_current_user
 from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate, ResourceLinkRequest, GlobalResourceResponse, DataFileMetadata, ImageMetadata
 from api.utils.hashing import compute_content_hash, compute_url_hash, compute_git_hash
 from api.utils.file_types import detect_file_category, get_resource_type, is_allowed_extension, FileCategory, format_allowed_extensions
@@ -450,7 +451,8 @@ async def add_resource(
     project_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Upload and process a resource file.
 
@@ -462,8 +464,11 @@ async def add_resource(
     If a resource with the same content hash already exists and is READY,
     we skip processing and just link it to this project.
     """
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -705,14 +710,18 @@ async def add_git_resource(
     project_id: str,
     request: GitRepoResourceCreate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Add and index a git repository.
 
     If a resource with the same git URL/branch already exists and is READY,
     we skip indexing and just link it to this project.
     """
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -764,7 +773,8 @@ async def add_url_resource(
     project_id: str,
     request: UrlResourceCreate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Add and index a URL resource (webpage or PDF).
 
@@ -773,7 +783,10 @@ async def add_url_resource(
     """
     from urllib.parse import urlparse, unquote
 
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -822,9 +835,16 @@ async def add_url_resource(
 
 
 @router.get("", response_model=list[ResourceResponse])
-def list_resources(project_id: str, db: Session = Depends(get_db)):
+def list_resources(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """List all resources in a project."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -832,10 +852,18 @@ def list_resources(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{resource_id}", response_model=ResourceResponse)
-def get_resource(project_id: str, resource_id: str, db: Session = Depends(get_db)):
+def get_resource(
+    project_id: str,
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Get a specific resource linked to a project."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -852,10 +880,18 @@ def get_resource(project_id: str, resource_id: str, db: Session = Depends(get_db
 
 
 @router.get("/{resource_id}/file")
-def get_resource_file(project_id: str, resource_id: str, db: Session = Depends(get_db)):
+def get_resource_file(
+    project_id: str,
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Download/view the resource file."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -880,7 +916,12 @@ def get_resource_file(project_id: str, resource_id: str, db: Session = Depends(g
 
 
 @router.delete("/{resource_id}")
-def delete_resource(project_id: str, resource_id: str, db: Session = Depends(get_db)):
+def delete_resource(
+    project_id: str,
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Remove a resource from a project.
 
     This unlinks the resource from the project. If the resource is not linked
@@ -888,8 +929,11 @@ def delete_resource(project_id: str, resource_id: str, db: Session = Depends(get
     """
     from fastapi import Query
 
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -931,11 +975,15 @@ async def reindex_resource(
     project_id: str,
     resource_id: str,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Reindex a resource."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -996,7 +1044,8 @@ def list_all_resources(
     skip: int = 0,
     limit: int = 100,
     status: ResourceStatus | None = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """List all global resources (resource library).
 
@@ -1037,7 +1086,11 @@ def list_all_resources(
 
 
 @global_router.get("/{resource_id}", response_model=GlobalResourceResponse)
-def get_global_resource(resource_id: str, db: Session = Depends(get_db)):
+def get_global_resource(
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Get a specific resource from the global library."""
     resource = db.query(Resource).filter(Resource.id == resource_id).first()
     if not resource:
@@ -1069,11 +1122,15 @@ def get_global_resource(resource_id: str, db: Session = Depends(get_db)):
 def link_resource_to_project(
     project_id: str,
     request: ResourceLinkRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Link an existing resource from the library to a project."""
-    # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    # Verify project exists and belongs to user
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1109,7 +1166,8 @@ def link_resource_to_project(
 def get_resource_chunks(
     resource_id: str,
     limit: int = 500,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Get the RAG chunks for a specific resource.
 
@@ -1171,7 +1229,11 @@ def get_resource_chunks(
 
 
 @global_router.delete("/{resource_id}")
-def delete_global_resource(resource_id: str, db: Session = Depends(get_db)):
+def delete_global_resource(
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Permanently delete a resource from the library.
 
     This removes the resource completely, including all project links

@@ -52,11 +52,43 @@ class NotificationType(str, enum.Enum):
     JOB_FAILED = "job_failed"
 
 
+class User(Base):
+    """User account for authentication."""
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    email = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=True)
+    is_active = Column(Integer, default=1, nullable=False)  # SQLite boolean
+    is_admin = Column(Integer, default=0, nullable=False)  # For future admin features
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+
+
+class MagicLinkToken(Base):
+    """Temporary tokens for magic link authentication."""
+    __tablename__ = "magic_link_tokens"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # Null for new user signup
+    email = Column(String, nullable=False, index=True)
+    token = Column(String(64), unique=True, nullable=False, index=True)  # SHA256 hash stored
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", backref="magic_link_tokens")
+
+
 class Project(Base):
     """A project contains threads and resources."""
     __tablename__ = "projects"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # Owner of the project
     name = Column(String, nullable=False)
     system_instructions = Column(Text, nullable=True)  # Custom instructions for the AI
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -64,6 +96,8 @@ class Project(Base):
     findings_summary = Column(Text, nullable=True)  # AI-generated summary of findings
     findings_summary_updated_at = Column(DateTime, nullable=True)  # When summary was last generated
 
+    # Relationships
+    user = relationship("User", back_populates="projects")
     # Many-to-many relationship with resources via bridge table
     project_resources = relationship("ProjectResource", back_populates="project", cascade="all, delete-orphan")
     threads = relationship("Thread", back_populates="project", cascade="all, delete-orphan")
@@ -706,6 +740,46 @@ def _run_incremental_migrations():
                 if "findings_summary_updated_at" not in project_columns:
                     conn.execute(text("ALTER TABLE projects ADD COLUMN findings_summary_updated_at DATETIME"))
                     print("[Migration] Added findings_summary_updated_at column to projects")
+
+            # Migration 16: Create users table
+            if "users" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE users (
+                        id VARCHAR PRIMARY KEY,
+                        email VARCHAR UNIQUE NOT NULL,
+                        name VARCHAR,
+                        is_active INTEGER DEFAULT 1 NOT NULL,
+                        is_admin INTEGER DEFAULT 0 NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        last_login_at DATETIME
+                    )
+                """))
+                conn.execute(text("CREATE INDEX ix_users_email ON users(email)"))
+                print("[Migration] Created users table")
+
+            # Migration 17: Create magic_link_tokens table
+            if "magic_link_tokens" not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE magic_link_tokens (
+                        id VARCHAR PRIMARY KEY,
+                        user_id VARCHAR REFERENCES users(id) ON DELETE CASCADE,
+                        email VARCHAR NOT NULL,
+                        token VARCHAR(64) UNIQUE NOT NULL,
+                        expires_at DATETIME NOT NULL,
+                        used_at DATETIME,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.execute(text("CREATE INDEX ix_magic_link_tokens_email ON magic_link_tokens(email)"))
+                conn.execute(text("CREATE INDEX ix_magic_link_tokens_token ON magic_link_tokens(token)"))
+                print("[Migration] Created magic_link_tokens table")
+
+            # Migration 18: Add user_id to projects
+            if "projects" in existing_tables:
+                project_columns = [col["name"] for col in inspector.get_columns("projects")]
+                if "user_id" not in project_columns:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN user_id VARCHAR REFERENCES users(id)"))
+                    print("[Migration] Added user_id column to projects")
 
             trans.commit()
         except Exception as e:

@@ -3,8 +3,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.database import get_db, Project, Thread
+from api.database import get_db, Project, Thread, User
 from api.schemas import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectDetail, ThreadResponse
+from api.middleware.auth import get_current_user
 
 
 def get_child_count(db: Session, thread_id: str) -> int:
@@ -18,9 +19,13 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.post("", response_model=ProjectResponse)
-def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(
+    project: ProjectCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Create a new project."""
-    db_project = Project(name=project.name)
+    db_project = Project(name=project.name, user_id=user.id)
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
@@ -36,9 +41,12 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[ProjectResponse])
-def list_projects(db: Session = Depends(get_db)):
-    """List all projects."""
-    projects = db.query(Project).all()
+def list_projects(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    """List all projects for the current user."""
+    projects = db.query(Project).filter(Project.user_id == user.id).all()
     return [
         ProjectResponse(
             id=p.id,
@@ -54,9 +62,16 @@ def list_projects(db: Session = Depends(get_db)):
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
-def get_project(project_id: str, db: Session = Depends(get_db)):
+def get_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Get project details including resources and threads."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -92,10 +107,14 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
 def update_project(
     project_id: str,
     update: ProjectUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """Update project settings (name, system instructions, etc.)."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -131,9 +150,16 @@ def update_project(
 
 
 @router.delete("/{project_id}")
-def delete_project(project_id: str, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
     """Delete a project and all its resources and threads."""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
