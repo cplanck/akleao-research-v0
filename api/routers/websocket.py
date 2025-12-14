@@ -520,6 +520,45 @@ def _try_subscribe_job(job_id: str):
         return None
 
 
+def _get_active_jobs_data():
+    """Get active jobs data using a short-lived database session."""
+    db = SessionLocal()
+    try:
+        active_jobs = db.query(ConversationJob).filter(
+            ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
+        ).all()
+        return [
+            {
+                "project_id": job.project_id,
+                "thread_id": job.thread_id,
+                "job_id": job.id,
+                "status": job.status.value,
+            }
+            for job in active_jobs
+        ]
+    finally:
+        db.close()
+
+
+def _get_thread_active_job(thread_id: str):
+    """Get active job for a thread using a short-lived database session."""
+    db = SessionLocal()
+    try:
+        job = db.query(ConversationJob).filter(
+            ConversationJob.thread_id == thread_id,
+            ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
+        ).order_by(ConversationJob.created_at.desc()).first()
+        if job:
+            return {
+                "id": job.id,
+                "status": job.status.value,
+                "partial_response": job.partial_response,
+            }
+        return None
+    finally:
+        db.close()
+
+
 @router.websocket("/ws/app")
 async def app_stream(websocket: WebSocket):
     """
@@ -531,6 +570,8 @@ async def app_stream(websocket: WebSocket):
 
     Works with or without Redis - if Redis is unavailable, real-time updates
     won't work but the connection stays open for polling.
+
+    NOTE: Uses short-lived database sessions for queries to avoid holding connections.
 
     Client messages:
     - { "type": "subscribe_thread", "project_id": "...", "thread_id": "..." }
@@ -544,7 +585,7 @@ async def app_stream(websocket: WebSocket):
     """
     await websocket.accept()
 
-    db: Session = SessionLocal()
+    # NO long-lived database session - use short-lived sessions via helper functions
     global_pubsub = None
     job_pubsub = None
     subscribed_project_id = None
@@ -553,20 +594,8 @@ async def app_stream(websocket: WebSocket):
     redis_available = True
 
     try:
-        # Send initial list of ALL active jobs across all projects
-        active_jobs = db.query(ConversationJob).filter(
-            ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
-        ).all()
-
-        jobs_data = [
-            {
-                "project_id": job.project_id,
-                "thread_id": job.thread_id,
-                "job_id": job.id,
-                "status": job.status.value,
-            }
-            for job in active_jobs
-        ]
+        # Send initial list of ALL active jobs (uses short-lived session)
+        jobs_data = _get_active_jobs_data()
         await websocket.send_json({
             "type": "active_jobs",
             "data": {"jobs": jobs_data}
@@ -658,27 +687,23 @@ async def app_stream(websocket: WebSocket):
                             subscribed_project_id = project_id
                             subscribed_thread_id = thread_id
 
-                            db.expire_all()
+                            # Use short-lived session to get active job
+                            job_data = _get_thread_active_job(thread_id)
 
-                            job = db.query(ConversationJob).filter(
-                                ConversationJob.thread_id == thread_id,
-                                ConversationJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING])
-                            ).order_by(ConversationJob.created_at.desc()).first()
+                            if job_data:
+                                subscribed_job_id = job_data["id"]
 
-                            if job:
-                                subscribed_job_id = job.id
-
-                                state = get_job_state(job.id)
+                                state = get_job_state(job_data["id"])
                                 await websocket.send_json({
                                     "type": "job_state",
                                     "data": {
                                         "project_id": project_id,
                                         "thread_id": thread_id,
-                                        "job_id": job.id,
-                                        "status": job.status.value,
+                                        "job_id": job_data["id"],
+                                        "status": job_data["status"],
                                         "current_phase": state.get("current_phase", "initializing"),
                                         "current_action": state.get("current_action", ""),
-                                        "content": state.get("content", "") or job.partial_response or "",
+                                        "content": state.get("content", "") or job_data.get("partial_response") or "",
                                         "sources": state.get("sources", []),
                                         "thinking": state.get("thinking", ""),
                                         "activity": state.get("activity", []),
@@ -688,7 +713,7 @@ async def app_stream(websocket: WebSocket):
                                 })
 
                                 if redis_available:
-                                    job_pubsub = _try_subscribe_job(job.id)
+                                    job_pubsub = _try_subscribe_job(job_data["id"])
                             else:
                                 await websocket.send_json({
                                     "type": "job_state",
@@ -737,7 +762,7 @@ async def app_stream(websocket: WebSocket):
     finally:
         _safe_pubsub_cleanup(global_pubsub)
         _safe_pubsub_cleanup(job_pubsub)
-        db.close()
+        # No db.close() needed - we use short-lived sessions via helper functions
         try:
             await websocket.close()
         except:
