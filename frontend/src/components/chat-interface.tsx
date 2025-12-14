@@ -771,10 +771,12 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     sourcesRef.current = [];
     currentJobIdRef.current = null;
 
-    // Focus input when thread changes (slight delay to ensure DOM is ready)
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 100);
+    // Focus input when thread changes (desktop only - mobile keyboard is distracting)
+    if (!isMobile) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
 
     // Check cache first for instant display (use ref to avoid dep array issues)
     const cachedMessages = getCachedMessagesRef.current(threadId);
@@ -810,7 +812,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
     // Subscribe to this thread to get agent state
     subscribeToThread(projectId, threadId);
-  }, [projectId, threadId, subscribeToThread, transformMessages]);
+  }, [projectId, threadId, subscribeToThread, transformMessages, isMobile]);
 
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
@@ -1030,13 +1032,14 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     }
   }, [messages, isLoading]);
 
-  // Focus input when a question is asked
+  // Focus input when a question is asked (desktop only)
   useEffect(() => {
+    if (isMobile) return;  // Skip on mobile to avoid keyboard popup
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.isQuestion && !isLoading && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isMobile]);
 
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isLoading) return;

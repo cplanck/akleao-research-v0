@@ -31,43 +31,43 @@ export function TextSelectionMenu({
     setSelectedText("");
   }, []);
 
-  const handleMouseUp = useCallback(
-    (event: MouseEvent) => {
-      // Small delay to let selection finalize
-      setTimeout(() => {
-        const selection = window.getSelection();
-        const text = selection?.toString().trim();
+  // Shared logic to check selection and show menu
+  const checkSelectionAndShowMenu = useCallback(() => {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
 
-        if (!text || text.length < minSelectionLength) {
-          hideMenu();
-          return;
-        }
+    if (!text || text.length < minSelectionLength) {
+      hideMenu();
+      return;
+    }
 
-        // Check if selection is within our container (if specified)
-        if (containerRef?.current && selection?.anchorNode) {
-          const container = containerRef.current;
-          if (!container.contains(selection.anchorNode)) {
-            hideMenu();
-            return;
-          }
-        }
+    // Check if selection is within our container (if specified)
+    if (containerRef?.current && selection?.anchorNode) {
+      const container = containerRef.current;
+      if (!container.contains(selection.anchorNode)) {
+        hideMenu();
+        return;
+      }
+    }
 
-        // Get selection rectangle
-        const range = selection?.getRangeAt(0);
-        const rect = range?.getBoundingClientRect();
+    // Get selection rectangle
+    const range = selection?.getRangeAt(0);
+    const rect = range?.getBoundingClientRect();
 
-        if (rect) {
-          // Position above the selection, centered
-          setPosition({
-            x: rect.left + rect.width / 2,
-            y: rect.top - 8,
-          });
-          setSelectedText(text);
-        }
-      }, 10);
-    },
-    [containerRef, minSelectionLength, hideMenu]
-  );
+    if (rect && rect.width > 0) {
+      // Position above the selection, centered
+      setPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top - 8,
+      });
+      setSelectedText(text);
+    }
+  }, [containerRef, minSelectionLength, hideMenu]);
+
+  const handleMouseUp = useCallback(() => {
+    // Small delay to let selection finalize
+    setTimeout(checkSelectionAndShowMenu, 10);
+  }, [checkSelectionAndShowMenu]);
 
   const handleMouseDown = useCallback(
     (event: MouseEvent) => {
@@ -79,21 +79,76 @@ export function TextSelectionMenu({
     [hideMenu]
   );
 
+  // Handle touch events for iOS
+  const handleTouchEnd = useCallback(() => {
+    // Longer delay for iOS to let selection handles settle
+    setTimeout(checkSelectionAndShowMenu, 300);
+  }, [checkSelectionAndShowMenu]);
+
+  const handleTouchStart = useCallback(
+    (event: TouchEvent) => {
+      // Hide menu if touching outside of it
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        hideMenu();
+      }
+    },
+    [hideMenu]
+  );
+
+  // Handle selection change (works on iOS when user adjusts selection handles)
+  const handleSelectionChange = useCallback(() => {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+
+    // If selection is cleared, hide menu
+    if (!text) {
+      hideMenu();
+      return;
+    }
+
+    // If we have a significant selection, update position (with debounce via the existing menu)
+    if (text.length >= minSelectionLength && position) {
+      // Update position if selection changed
+      const range = selection?.getRangeAt(0);
+      const rect = range?.getBoundingClientRect();
+      if (rect && rect.width > 0) {
+        setPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top - 8,
+        });
+        setSelectedText(text);
+      }
+    }
+  }, [hideMenu, minSelectionLength, position]);
+
   const handleScroll = useCallback(() => {
     hideMenu();
   }, [hideMenu]);
 
   useEffect(() => {
+    // Mouse events (desktop)
     document.addEventListener("mouseup", handleMouseUp);
     document.addEventListener("mousedown", handleMouseDown);
+
+    // Touch events (iOS/mobile)
+    document.addEventListener("touchend", handleTouchEnd);
+    document.addEventListener("touchstart", handleTouchStart);
+
+    // Selection change (helps with iOS selection handles)
+    document.addEventListener("selectionchange", handleSelectionChange);
+
+    // Scroll
     window.addEventListener("scroll", handleScroll, true);
 
     return () => {
       document.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("touchend", handleTouchEnd);
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("selectionchange", handleSelectionChange);
       window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [handleMouseUp, handleMouseDown, handleScroll]);
+  }, [handleMouseUp, handleMouseDown, handleTouchEnd, handleTouchStart, handleSelectionChange, handleScroll]);
 
   const handleDiveDeeper = useCallback(() => {
     if (selectedText) {
