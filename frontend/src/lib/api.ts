@@ -1264,3 +1264,4 @@ export function connectToJobStream(
     }
   };
 }
+// Build timestamp: Sun Dec 14 13:19:24 MST 2025
