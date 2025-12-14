@@ -1,0 +1,117 @@
+# Production Docker Compose for Akleao Research
+# Frontend is deployed separately on Vercel
+#
+# Services:
+# - nginx: Reverse proxy with SSL termination
+# - api: FastAPI backend
+# - celery: Background job worker
+# - redis: Message broker and result backend
+#
+# External dependencies (not in this compose):
+# - Cloud SQL PostgreSQL (via Cloud SQL Proxy)
+# - GCS bucket for file uploads
+
+services:
+  # Nginx reverse proxy with SSL
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Redis for Celery broker and result backend
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # FastAPI backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    environment:
+      # Database (Cloud SQL via proxy or direct connection)
+      - DB_HOST=${DB_HOST:-127.0.0.1}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-akleao}
+      - DB_USER=${DB_USER:-akleao_user}
+      - DB_PASSWORD=${DB_PASSWORD}
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      # GCS Storage
+      - GCS_BUCKET=${GCS_BUCKET}
+      # API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-akleao-research}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      # Email
+      - MAILGUN_API_KEY=${MAILGUN_API_KEY}
+      - MAILGUN_DOMAIN=${MAILGUN_DOMAIN}
+      - MAILGUN_FROM_EMAIL=${MAILGUN_FROM_EMAIL}
+      # Auth
+      - JWT_SECRET=${JWT_SECRET}
+      # CORS - add your Vercel domains
+      - FRONTEND_URL=${FRONTEND_URL}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Celery worker for background jobs
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    command: celery -A api.tasks worker --loglevel=info --concurrency=2
+    environment:
+      # Database
+      - DB_HOST=${DB_HOST:-127.0.0.1}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-akleao}
+      - DB_USER=${DB_USER:-akleao_user}
+      - DB_PASSWORD=${DB_PASSWORD}
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      # GCS Storage
+      - GCS_BUCKET=${GCS_BUCKET}
+      # API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-akleao-research}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+# Network configuration (uses default bridge network)
+# All services can communicate via service names

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Stop script for Simage RAG services
+# Stop script for Akleao Research services
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}=== Stopping Simage RAG Services ===${NC}"
+echo -e "${YELLOW}=== Stopping Akleao Research Services ===${NC}"
 
 # Stop Celery worker
 if [ -f "$PROJECT_ROOT/celery.pid" ]; then
@@ -27,7 +27,7 @@ if [ -f "$PROJECT_ROOT/celery.pid" ]; then
     fi
 else
     # Try to find and kill any celery workers for this project
-    pkill -f "celery.*simage_tasks" 2>/dev/null && echo -e "${GREEN}✓ Celery workers stopped${NC}" || echo -e "${YELLOW}No Celery workers found${NC}"
+    pkill -f "celery.*akleao_tasks" 2>/dev/null && echo -e "${GREEN}✓ Celery workers stopped${NC}" || echo -e "${YELLOW}No Celery workers found${NC}"
 fi
 
 # Optionally stop Redis (commented out by default as other apps may use it)

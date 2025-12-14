@@ -34,7 +34,7 @@ trap cleanup SIGINT SIGTERM
 
 echo ""
 echo "================================"
-echo "Simage RAG is running!"
+echo "Akleao Research is running!"
 echo "  Frontend: http://localhost:3000"
 echo "  API:      http://localhost:8000"
 echo "  API Docs: http://localhost:8000/docs"

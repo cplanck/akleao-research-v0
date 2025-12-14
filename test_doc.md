@@ -1,7 +1,7 @@
-# Simage RAG System Overview
+# Akleao Research System Overview
 
 ## Purpose
-The Simage RAG system is designed to ingest documents, create embeddings, store them in a vector database, and enable intelligent querying using large language models.
+The Akleao Research system is designed to ingest documents, create embeddings, store them in a vector database, and enable intelligent querying using large language models.
 
 ## Architecture Components
 

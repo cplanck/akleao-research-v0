@@ -205,7 +205,7 @@ def clear_job_state(job_id: str):
 
 # Create Celery app
 celery_app = Celery(
-    "simage_tasks",
+    "akleao_tasks",
     broker=redis_url,
     backend=redis_url,
     include=["api.tasks.conversation"],  # Include task modules

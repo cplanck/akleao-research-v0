@@ -36,7 +36,7 @@ def get_agent(version: Optional[str] = None):
     embedder = Embedder(api_key=openai_key)
     vectorstore = VectorStore(
         api_key=pinecone_key,
-        index_name=os.getenv("PINECONE_INDEX_NAME", "simage-rag"),
+        index_name=os.getenv("PINECONE_INDEX_NAME", "akleao-research"),
         dimension=embedder.dimensions
     )
     vectorstore.create_index_if_not_exists()
@@ -494,7 +494,7 @@ def get_retriever():
     embedder = Embedder(api_key=openai_key)
     vectorstore = VectorStore(
         api_key=pinecone_key,
-        index_name=os.getenv("PINECONE_INDEX_NAME", "simage-rag"),
+        index_name=os.getenv("PINECONE_INDEX_NAME", "akleao-research"),
         dimension=embedder.dimensions
     )
     vectorstore.create_index_if_not_exists()

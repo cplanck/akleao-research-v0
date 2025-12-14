@@ -26,7 +26,7 @@ def send_magic_link_email(
     mailgun_api_key = os.getenv("MAILGUN_API_KEY")
     mailgun_domain = os.getenv("MAILGUN_DOMAIN")
     mailgun_from = os.getenv("MAILGUN_FROM_EMAIL", f"noreply@{mailgun_domain}")
-    app_name = os.getenv("APP_NAME", "Simage")
+    app_name = os.getenv("APP_NAME", "Akleao")
 
     if not mailgun_api_key or not mailgun_domain:
         raise ValueError("Mailgun not configured. Set MAILGUN_API_KEY and MAILGUN_DOMAIN.")

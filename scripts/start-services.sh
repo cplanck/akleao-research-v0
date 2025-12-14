@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Start script for Simage RAG services
+# Start script for Akleao Research services
 # This script starts Redis and Celery worker for background job processing
 
 set -e
@@ -16,7 +16,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== Simage RAG Services Startup ===${NC}"
+echo -e "${GREEN}=== Akleao Research Services Startup ===${NC}"
 
 # Check if Redis is installed
 if ! command -v redis-server &> /dev/null; then
@@ -71,7 +71,7 @@ echo -e "${GREEN}✓ Python dependencies installed${NC}"
 echo -e "${YELLOW}Starting Celery worker...${NC}"
 
 # Kill any existing Celery workers for this project
-pkill -f "celery.*simage_tasks" 2>/dev/null || true
+pkill -f "celery.*akleao_tasks" 2>/dev/null || true
 
 # Start Celery worker
 celery -A api.tasks worker --loglevel=info --detach --pidfile="$PROJECT_ROOT/celery.pid" --logfile="$PROJECT_ROOT/celery.log"

@@ -1,14 +1,61 @@
 """Database setup and models."""
 
+import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, String, DateTime, ForeignKey, Text, Enum, Integer
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
+from sqlalchemy.pool import QueuePool
 import enum
 import uuid
 
-DATABASE_URL = "sqlite:///./simage.db"
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+def get_database_url() -> str:
+    """Get database URL from environment variables.
+
+    Supports:
+    - DATABASE_URL: Direct connection string (e.g., postgresql://user:pass@host/db or sqlite:///./akleao.db)
+    - DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT: Component-based PostgreSQL config
+    - Fallback: SQLite for local development
+    """
+    # Direct connection string takes priority
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return database_url
+
+    # Component-based PostgreSQL connection
+    db_host = os.getenv("DB_HOST")
+    if db_host:
+        db_user = os.getenv("DB_USER", "postgres")
+        db_password = os.getenv("DB_PASSWORD", "")
+        db_name = os.getenv("DB_NAME", "akleao")
+        db_port = os.getenv("DB_PORT", "5432")
+        return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+    # Default: SQLite for local development
+    return "sqlite:///./akleao.db"
+
+
+def create_db_engine(database_url: str):
+    """Create SQLAlchemy engine with appropriate settings for the database type."""
+    if database_url.startswith("sqlite"):
+        # SQLite-specific settings
+        return create_engine(
+            database_url,
+            connect_args={"check_same_thread": False}
+        )
+    else:
+        # PostgreSQL with connection pooling
+        return create_engine(
+            database_url,
+            poolclass=QueuePool,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,  # Verify connections before use
+        )
+
+
+DATABASE_URL = get_database_url()
+engine = create_db_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -795,3 +842,10 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def run_migrations():
+    """Run database migrations. Called during deployment."""
+    print(f"[Database] Running migrations against: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
+    init_db()
+    print("[Database] Migrations complete")

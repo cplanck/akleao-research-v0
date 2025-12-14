@@ -1,0 +1,96 @@
+# Production Dockerfile for Akleao Research API and Celery worker
+# Multi-stage build for smaller image size
+
+# ============================================================================
+# Stage 1: Builder - Install dependencies
+# ============================================================================
+FROM python:3.13-slim AS builder
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY pyproject.toml ./
+
+# Install dependencies to a local directory for copying later
+RUN pip install --no-cache-dir --prefix=/install -e . && \
+    pip install --no-cache-dir --prefix=/install \
+    celery \
+    redis \
+    tavily-python \
+    pillow \
+    pandas \
+    openpyxl \
+    websockets \
+    email-validator \
+    gunicorn \
+    uvloop \
+    httptools
+
+# ============================================================================
+# Stage 2: Runtime - Production image
+# ============================================================================
+FROM python:3.13-slim AS runtime
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV PORT=8000
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user for security
+RUN groupadd -r akleao && useradd -r -g akleao akleao
+
+# Copy installed Python packages from builder
+COPY --from=builder /install /usr/local
+
+# Set work directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=akleao:akleao api/ ./api/
+COPY --chown=akleao:akleao rag/ ./rag/
+COPY --chown=akleao:akleao pyproject.toml ./
+
+# Create directories for uploads and data (if using local storage in dev)
+RUN mkdir -p uploads repos && chown -R akleao:akleao uploads repos
+
+# Switch to non-root user
+USER akleao
+
+# Expose port for API
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command: Run with Gunicorn for production
+# Uses Uvicorn workers for async support
+CMD ["gunicorn", "api.app:app", \
+    "--bind", "0.0.0.0:8000", \
+    "--workers", "2", \
+    "--worker-class", "uvicorn.workers.UvicornWorker", \
+    "--timeout", "120", \
+    "--keep-alive", "5", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-"]

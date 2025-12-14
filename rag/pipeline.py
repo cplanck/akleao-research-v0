@@ -87,7 +87,7 @@ class RAGPipeline:
         openai_api_key: str = None,
         anthropic_api_key: str = None,
         pinecone_api_key: str = None,
-        pinecone_index_name: str = "simage-rag",
+        pinecone_index_name: str = "akleao-research",
         chunk_size: int = 500,
         chunk_overlap: int = 50,
         embedding_model: str = "text-embedding-3-small",
@@ -100,7 +100,7 @@ class RAGPipeline:
         openai_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         anthropic_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
         pinecone_key = pinecone_api_key or os.getenv("PINECONE_API_KEY")
-        index_name = pinecone_index_name or os.getenv("PINECONE_INDEX_NAME", "simage-rag")
+        index_name = pinecone_index_name or os.getenv("PINECONE_INDEX_NAME", "akleao-research")
 
         # Initialize components
         self.loader = DocumentLoader()

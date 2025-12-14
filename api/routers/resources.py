@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db, Project, Resource, ResourceType, ResourceStatus, ProjectResource, DataResourceMetadata, ImageResourceMetadata, User
@@ -14,6 +14,7 @@ from api.middleware.auth import get_current_user
 from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate, ResourceLinkRequest, GlobalResourceResponse, DataFileMetadata, ImageMetadata
 from api.utils.hashing import compute_content_hash, compute_url_hash, compute_git_hash
 from api.utils.file_types import detect_file_category, get_resource_type, is_allowed_extension, FileCategory, format_allowed_extensions
+from api.storage import get_storage
 from rag import RAGPipeline
 
 router = APIRouter(prefix="/projects/{project_id}/resources", tags=["resources"])
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/projects/{project_id}/resources", tags=["resources"]
 # Global resources router (no project_id prefix)
 global_router = APIRouter(prefix="/resources", tags=["resources"])
 
+# Legacy paths for backward compatibility
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -498,13 +500,9 @@ async def add_resource(
         db.refresh(existing_resource)
         return existing_resource
 
-    # Save uploaded file (need to reset file position after reading)
-    project_upload_dir = UPLOAD_DIR / project_id
-    project_upload_dir.mkdir(exist_ok=True)
-
-    file_path = project_upload_dir / file.filename
-    with open(file_path, "wb") as f:
-        f.write(file_content)
+    # Save uploaded file using storage abstraction
+    storage = get_storage()
+    file_path = storage.save(project_id, file.filename, file_content)
 
     # Get file size
     file_size = len(file_content)
@@ -886,7 +884,11 @@ def get_resource_file(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    """Download/view the resource file."""
+    """Download/view the resource file.
+
+    For local storage: Returns FileResponse with the file.
+    For GCS storage: Redirects to a signed URL.
+    """
     # Verify project exists and belongs to user
     project = db.query(Project).filter(
         Project.id == project_id,
@@ -905,14 +907,27 @@ def get_resource_file(
         raise HTTPException(status_code=404, detail="Resource not found in this project")
 
     resource = link.resource
-    if not resource.source or not os.path.exists(resource.source):
+    if not resource.source:
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(
-        path=resource.source,
-        filename=resource.filename,
-        media_type="application/octet-stream"
-    )
+    storage = get_storage()
+
+    # Check if file exists in storage
+    if not storage.exists(resource.source):
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    # For local storage, use FileResponse
+    local_path = storage.get_file_path(resource.source)
+    if local_path:
+        return FileResponse(
+            path=local_path,
+            filename=resource.filename,
+            media_type="application/octet-stream"
+        )
+
+    # For cloud storage, redirect to signed URL
+    download_url = storage.get_download_url(resource.source, resource.filename)
+    return RedirectResponse(url=download_url)
 
 
 @router.delete("/{resource_id}")
@@ -1202,7 +1217,7 @@ def get_resource_chunks(
     embedder = Embedder(api_key=openai_key)
     vectorstore = VectorStore(
         api_key=pinecone_key,
-        index_name=os.getenv("PINECONE_INDEX_NAME", "simage-rag"),
+        index_name=os.getenv("PINECONE_INDEX_NAME", "akleao-research"),
         dimension=embedder.dimensions
     )
 
@@ -1243,9 +1258,10 @@ def delete_global_resource(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
 
-    # Delete uploaded file if exists
-    if resource.source and os.path.exists(resource.source):
-        os.remove(resource.source)
+    # Delete uploaded file from storage
+    if resource.source:
+        storage = get_storage()
+        storage.delete(resource.source)
 
     # TODO: Delete vectors from Pinecone for this resource
 

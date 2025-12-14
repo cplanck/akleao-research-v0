@@ -1,4 +1,4 @@
-# Dockerfile for Simage RAG API and Celery worker
+# Dockerfile for Akleao Research API and Celery worker
 FROM python:3.13-slim
 
 # Set environment variables

@@ -8,7 +8,7 @@ from api.database import init_db
 from api.routers import projects, threads, resources, query, messages, findings, jobs, notifications, websocket, auth
 
 app = FastAPI(
-    title="Simage RAG API",
+    title="Akleao Research API",
     description="RAG microservice for document ingestion and querying",
     version="0.1.0"
 )
@@ -21,10 +21,20 @@ cors_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-# Add any additional origins from environment
+
+# Add Vercel domains for production/preview deployments
+vercel_url = os.getenv("VERCEL_URL")  # Set by Vercel automatically
+if vercel_url:
+    cors_origins.append(f"https://{vercel_url}")
+
+# Add any additional origins from environment (comma-separated)
+# Example: CORS_ORIGINS=https://akleao.vercel.app,https://custom-domain.com
 extra_origins = os.getenv("CORS_ORIGINS", "")
 if extra_origins:
     cors_origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
+
+# Remove duplicates while preserving order
+cors_origins = list(dict.fromkeys(cors_origins))
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,7 +67,7 @@ def startup():
 @app.get("/")
 def root():
     """Health check."""
-    return {"status": "ok", "service": "simage-rag"}
+    return {"status": "ok", "service": "akleao-research"}
 
 
 @app.get("/health")

@@ -11,7 +11,7 @@ class VectorStore:
     def __init__(
         self,
         api_key: str,
-        index_name: str = "simage-rag",
+        index_name: str = "akleao-research",
         dimension: int = 1536,
         metric: str = "cosine"
     ):

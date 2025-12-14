@@ -339,7 +339,7 @@ def email_findings(
             {content_html}
         </div>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 16px 0;">
-        <p style="font-size: 12px; color: #9ca3af; margin: 0;">Sent from Simage</p>
+        <p style="font-size: 12px; color: #9ca3af; margin: 0;">Sent from Akleao</p>
     </body>
     </html>
     """
@@ -369,7 +369,7 @@ def email_findings(
         <p style="color: #6b7280;">You have {len(findings)} saved finding{"s" if len(findings) != 1 else ""}:</p>
         {findings_html}
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 16px 0;">
-        <p style="font-size: 12px; color: #9ca3af; margin: 0;">Sent from Simage</p>
+        <p style="font-size: 12px; color: #9ca3af; margin: 0;">Sent from Akleao</p>
     </body>
     </html>
     """

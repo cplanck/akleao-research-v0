@@ -24,7 +24,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PINECONE_API_KEY=${PINECONE_API_KEY}
-      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-simage-rag}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-akleao-research}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - MAILGUN_API_KEY=${MAILGUN_API_KEY}
       - MAILGUN_DOMAIN=${MAILGUN_DOMAIN}
@@ -34,7 +34,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
-      - ./simage.db:/app/simage.db
+      - ./akleao.db:/app/akleao.db
     depends_on:
       redis:
         condition: service_healthy
@@ -55,12 +55,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PINECONE_API_KEY=${PINECONE_API_KEY}
-      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-simage-rag}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-akleao-research}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
     volumes:
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
-      - ./simage.db:/app/simage.db
+      - ./akleao.db:/app/akleao.db
     depends_on:
       redis:
         condition: service_healthy
