@@ -45,12 +45,16 @@ def create_db_engine(database_url: str):
         )
     else:
         # PostgreSQL with connection pooling
+        # db-f1-micro has ~25 max connections, so keep pools small
+        # With 2 API workers + 2 Celery workers, each can have max 5 connections = 20 total
         return create_engine(
             database_url,
             poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,  # Verify connections before use
+            pool_size=2,           # Keep only 2 connections open per process
+            max_overflow=3,        # Allow up to 3 more temporarily (5 total per process)
+            pool_pre_ping=True,    # Verify connections before use
+            pool_recycle=1800,     # Recycle connections every 30 minutes
+            pool_timeout=30,       # Fail after 30 seconds if no connection available
         )
 
 
