@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -20,6 +20,45 @@ export function PdfViewer({ url, initialPage = 1 }: PdfViewerProps) {
   const [pageNumber, setPageNumber] = useState(initialPage);
   const [scale, setScale] = useState(1.0);
   const [isLoading, setIsLoading] = useState(true);
+  const [pdfData, setPdfData] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Fetch PDF with credentials and convert to blob URL
+  useEffect(() => {
+    let blobUrl: string | null = null;
+
+    const fetchPdf = async () => {
+      try {
+        setIsLoading(true);
+        setFetchError(null);
+
+        const response = await fetch(url, {
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load PDF: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        blobUrl = URL.createObjectURL(blob);
+        setPdfData(blobUrl);
+      } catch (error) {
+        console.error("Error fetching PDF:", error);
+        setFetchError(error instanceof Error ? error.message : "Failed to load PDF");
+        setIsLoading(false);
+      }
+    };
+
+    fetchPdf();
+
+    // Cleanup blob URL on unmount or URL change
+    return () => {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [url]);
 
   const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -32,6 +71,7 @@ export function PdfViewer({ url, initialPage = 1 }: PdfViewerProps) {
 
   const onDocumentLoadError = useCallback((error: Error) => {
     console.error("Error loading PDF:", error);
+    setFetchError(error.message);
     setIsLoading(false);
   }, []);
 
@@ -105,33 +145,43 @@ export function PdfViewer({ url, initialPage = 1 }: PdfViewerProps) {
 
       {/* PDF content */}
       <div className="flex-1 overflow-auto flex justify-center bg-muted/20 p-4">
-        <Document
-          file={url}
-          onLoadSuccess={onDocumentLoadSuccess}
-          onLoadError={onDocumentLoadError}
-          loading={
-            <div className="flex items-center justify-center h-full">
-              <span className="text-muted-foreground">Loading PDF...</span>
-            </div>
-          }
-          error={
-            <div className="flex items-center justify-center h-full">
-              <span className="text-destructive">Failed to load PDF</span>
-            </div>
-          }
-        >
-          <Page
-            pageNumber={pageNumber}
-            scale={scale}
-            renderTextLayer={true}
-            renderAnnotationLayer={true}
+        {fetchError ? (
+          <div className="flex items-center justify-center h-full">
+            <span className="text-destructive">{fetchError}</span>
+          </div>
+        ) : !pdfData ? (
+          <div className="flex items-center justify-center h-full">
+            <span className="text-muted-foreground">Loading PDF...</span>
+          </div>
+        ) : (
+          <Document
+            file={pdfData}
+            onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={onDocumentLoadError}
             loading={
-              <div className="flex items-center justify-center h-[600px] w-[400px]">
-                <span className="text-muted-foreground">Loading page...</span>
+              <div className="flex items-center justify-center h-full">
+                <span className="text-muted-foreground">Loading PDF...</span>
               </div>
             }
-          />
-        </Document>
+            error={
+              <div className="flex items-center justify-center h-full">
+                <span className="text-destructive">Failed to load PDF</span>
+              </div>
+            }
+          >
+            <Page
+              pageNumber={pageNumber}
+              scale={scale}
+              renderTextLayer={true}
+              renderAnnotationLayer={true}
+              loading={
+                <div className="flex items-center justify-center h-[600px] w-[400px]">
+                  <span className="text-muted-foreground">Loading page...</span>
+                </div>
+              }
+            />
+          </Document>
+        )}
       </div>
     </div>
   );

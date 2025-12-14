@@ -1047,14 +1047,23 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     if (!input.trim() || isLoading) return;
 
     const question = input.trim();
+    const tempId = `temp-${Date.now()}`;
+
+    // Reset streaming state
     streamingRef.current = "";
     sourcesRef.current = [];
-
     setInput("");
     setTokenCount(0);
 
     // Invalidate cache since we're adding new messages
     invalidateMessageCache(threadId);
+
+    // OPTIMISTIC UI: Show message immediately before API call
+    setMessages((prev) => [
+      ...prev,
+      { id: tempId, role: "user" as const, content: question },
+      { id: `assistant-${tempId}`, role: "assistant" as const, content: "", sources: [] }
+    ]);
 
     try {
       // Create job - this saves the user message and enqueues Celery task
@@ -1062,12 +1071,11 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       const jobId = job.id;
       currentJobIdRef.current = jobId;
 
-      // Add user and assistant messages to UI
-      setMessages((prev) => [
-        ...prev,
-        { id: `user-${jobId}`, role: "user" as const, content: question },
-        { id: `job-${jobId}`, role: "assistant" as const, content: "", sources: [] }
-      ]);
+      // Update temp IDs with real job IDs
+      setMessages((prev) => prev.map((m) =>
+        m.id === tempId ? { ...m, id: `user-${jobId}` } :
+        m.id === `assistant-${tempId}` ? { ...m, id: `job-${jobId}` } : m
+      ));
 
       // Auto-generate thread title from first message if title is "New Thread"
       if (threadTitle === "New Thread" && !hasGeneratedTitleRef.current && messages.length === 0) {
@@ -1086,6 +1094,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
     } catch (error) {
       console.error("Failed to create job:", error);
+      // Remove the optimistic messages on error
+      setMessages((prev) => prev.filter((m) => m.id !== tempId && m.id !== `assistant-${tempId}`));
       toast.error("Failed to send message. Please try again.");
       currentJobIdRef.current = null;
     }

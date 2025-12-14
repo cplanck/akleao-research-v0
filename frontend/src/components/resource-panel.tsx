@@ -14,6 +14,70 @@ import { Input } from "@/components/ui/input";
 import { Resource, GlobalResource, uploadResource, deleteResource, getResourceFileUrl, addUrlResource, addGitResource, reindexResource, getResource, listGlobalResources, linkResourceToProject } from "@/lib/api";
 import { toast } from "sonner";
 
+// Authenticated image component - fetches with credentials
+function AuthenticatedImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let blobUrl: string | null = null;
+
+    const fetchImage = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const response = await fetch(src, {
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load image: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        blobUrl = URL.createObjectURL(blob);
+        setImageSrc(blobUrl);
+      } catch (err) {
+        console.error("Error fetching image:", err);
+        setError(err instanceof Error ? err.message : "Failed to load image");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchImage();
+
+    return () => {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [src]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-muted-foreground">Loading image...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-destructive">{error}</span>
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={imageSrc || ""} alt={alt} className={className} />
+  );
+}
+
 // Dynamically import PdfViewer to avoid SSR issues with react-pdf
 const PdfViewer = dynamic(
   () => import("@/components/pdf-viewer").then((mod) => mod.PdfViewer),
@@ -971,8 +1035,7 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
                 // Image preview
                 <div className="h-full flex flex-col items-center justify-center gap-4 p-4">
                   <div className="flex-1 flex items-center justify-center overflow-auto">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
+                    <AuthenticatedImage
                       src={getResourceFileUrl(projectId, viewingResource.id)}
                       alt={viewingResource.filename || "Image"}
                       className="max-w-full max-h-full object-contain"
