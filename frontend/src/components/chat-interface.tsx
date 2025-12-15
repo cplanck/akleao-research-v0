@@ -1135,32 +1135,46 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     // Response will stream below it (like ChatGPT)
     // The streaming assistant message has min-height to create scroll room
     setTimeout(() => {
-      const userMessageEl = document.getElementById(`message-${tempId}`);
-      const scrollContainer = scrollRef.current;
-      const banner = document.getElementById("subthread-banner");
+      requestAnimationFrame(() => {
+        const userMessageEl = document.getElementById(`message-${tempId}`);
+        const scrollContainer = scrollRef.current;
+        const banner = document.getElementById("subthread-banner");
 
-      if (userMessageEl && scrollContainer) {
-        const containerRect = scrollContainer.getBoundingClientRect();
-        const messageRect = userMessageEl.getBoundingClientRect();
-        const bannerHeight = banner ? banner.offsetHeight : 0;
-        const padding = bannerHeight > 0 ? 8 : 16;
+        if (userMessageEl && scrollContainer) {
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const messageRect = userMessageEl.getBoundingClientRect();
+          const bannerHeight = banner ? banner.offsetHeight : 0;
+          const padding = bannerHeight > 0 ? 8 : 16;
 
-        // Current visual distance from message to container top
-        const currentVisualOffset = messageRect.top - containerRect.top;
+          // Current visual distance from message to container top
+          const currentVisualOffset = messageRect.top - containerRect.top;
 
-        // We want the message to be at (bannerHeight + padding) from container top
-        const desiredVisualOffset = bannerHeight + padding;
+          // We want the message to be at (bannerHeight + padding) from container top
+          const desiredVisualOffset = bannerHeight + padding;
 
-        // Calculate how much to scroll
-        const scrollAdjustment = currentVisualOffset - desiredVisualOffset;
-        const targetScrollTop = scrollContainer.scrollTop + scrollAdjustment;
+          // Calculate how much to scroll
+          const scrollAdjustment = currentVisualOffset - desiredVisualOffset;
+          const targetScrollTop = scrollContainer.scrollTop + scrollAdjustment;
 
-        scrollContainer.scrollTo({
-          top: Math.max(0, targetScrollTop),
-          behavior: "smooth"
-        });
-      }
-    }, 50);
+          console.log('[SCROLL DEBUG]', {
+            bannerHeight,
+            containerRectTop: containerRect.top,
+            messageRectTop: messageRect.top,
+            currentVisualOffset,
+            desiredVisualOffset,
+            scrollAdjustment,
+            currentScrollTop: scrollContainer.scrollTop,
+            targetScrollTop,
+            clampedTarget: Math.max(0, targetScrollTop)
+          });
+
+          scrollContainer.scrollTo({
+            top: Math.max(0, targetScrollTop),
+            behavior: "smooth"
+          });
+        }
+      });
+    }, 100);
 
     try {
       // Create job - this saves the user message and enqueues Celery task
