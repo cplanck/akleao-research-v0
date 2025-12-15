@@ -903,6 +903,38 @@ def _run_incremental_migrations():
             print(f"[Migration] Incremental migration failed: {e}")
             raise
 
+    # Migration 20: Add new ResourceStatus enum values for PostgreSQL
+    # ALTER TYPE ... ADD VALUE cannot run inside a transaction, so handle separately
+    is_postgres = 'postgresql' in str(engine.url)
+    if is_postgres:
+        # New status values added for 3-stage upload (use uppercase to match existing enum)
+        new_status_values = ['UPLOADED', 'EXTRACTING', 'EXTRACTED', 'STORED', 'INDEXED', 'ANALYZED', 'DESCRIBED', 'PARTIAL']
+
+        # Get current enum values
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT enumlabel FROM pg_enum e
+                JOIN pg_type t ON e.enumtypid = t.oid
+                WHERE t.typname = 'resourcestatus'
+            """))
+            existing_values = {row[0] for row in result}
+
+        # Add missing values (must be outside transaction for PostgreSQL)
+        for value in new_status_values:
+            if value not in existing_values:
+                # Use raw connection with autocommit for ALTER TYPE
+                raw_conn = engine.raw_connection()
+                try:
+                    raw_conn.set_session(autocommit=True)
+                    cursor = raw_conn.cursor()
+                    cursor.execute(f"ALTER TYPE resourcestatus ADD VALUE IF NOT EXISTS '{value}'")
+                    cursor.close()
+                    print(f"[Migration] Added '{value}' to resourcestatus enum")
+                except Exception as e:
+                    print(f"[Migration] Failed to add '{value}' to resourcestatus enum: {e}")
+                finally:
+                    raw_conn.close()
+
 
 def get_db():
     """Dependency for FastAPI routes."""
