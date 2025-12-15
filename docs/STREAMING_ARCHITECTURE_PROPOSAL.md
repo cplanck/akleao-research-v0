@@ -1,6 +1,35 @@
-# Streaming Architecture Proposal: State of the Art
+# Streaming Architecture: Optimizations Implemented
 
-## Current Issues
+## What Was Done
+
+### Phase 1: Quick Wins ✅
+- Reduced Redis polling timeout from 50-100ms to 10ms
+- Reduced WebSocket loop sleep from 10ms to 1ms
+- Increased DB save interval from 100 to 500 chars
+- Batched Redis operations using pipelines
+
+### Phase 2: Async Redis Pub/Sub ✅
+- Refactored WebSocket handlers to use `redis.asyncio`
+- Replaced polling with true async `pubsub.listen()` iterator
+- Zero polling latency - instant message delivery
+
+## Architecture (Current)
+
+```
+Frontend ←──WebSocket──← FastAPI ←──async pubsub.listen()──← Redis ←── Celery Worker ←── Anthropic
+                                                                              │
+                                                                              └──→ Database
+```
+
+**Key Features Preserved:**
+- ✅ Background operation (jobs continue when user navigates away)
+- ✅ Concurrent jobs (multiple agents running in parallel)
+- ✅ Late-join support (reconnect and see current state)
+- ✅ State persistence (Redis hash for real-time, DB for durability)
+
+---
+
+## Previous Issues (Now Fixed)
 
 ### 1. Direct SSE Path (query.py)
 - Uses `threading.Thread` + `queue.Queue` to bridge sync agent to async SSE
