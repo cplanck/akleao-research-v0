@@ -1134,11 +1134,18 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     // Smooth scroll to position user's message at the TOP of the chat viewport
     // Response will stream below it (like ChatGPT)
     // The streaming assistant message has min-height to create scroll room
-    // CSS scroll-padding-top on the container automatically accounts for sticky banner
     setTimeout(() => {
       const userMessageEl = document.getElementById(`message-${tempId}`);
-      if (userMessageEl) {
-        // scrollIntoView respects scroll-padding-top CSS property
+      const scrollContainer = scrollRef.current;
+      const banner = document.getElementById("subthread-banner");
+
+      if (userMessageEl && scrollContainer) {
+        // Get banner height if in subthread, otherwise use small padding
+        const bannerHeight = banner ? banner.getBoundingClientRect().height : 0;
+        const topPadding = bannerHeight > 0 ? bannerHeight + 8 : 16; // 8px extra breathing room
+
+        // Apply scroll-margin-top to the message element so scrollIntoView positions it correctly
+        userMessageEl.style.scrollMarginTop = `${topPadding}px`;
         userMessageEl.scrollIntoView({ block: "start", behavior: "smooth" });
       }
     }, 50);
