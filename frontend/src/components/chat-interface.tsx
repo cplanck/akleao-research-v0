@@ -824,9 +824,13 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   }, [projectId, threadId, subscribeToThread, transformMessages]);
 
   // Scroll to bottom when thread is first loaded (standard chat behavior)
+  // Track if user is actively in a conversation (has submitted at least once)
+  const isInConversationRef = useRef(false);
   const hasScrolledToBottomRef = useRef(false);
+
   useEffect(() => {
-    if (messagesLoaded && messages.length > 0 && !hasScrolledToBottomRef.current) {
+    // Only scroll to bottom on initial load, not during active conversation
+    if (messagesLoaded && messages.length > 0 && !hasScrolledToBottomRef.current && !isInConversationRef.current) {
       hasScrolledToBottomRef.current = true;
       // Small delay to ensure DOM is rendered
       setTimeout(() => {
@@ -837,9 +841,10 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     }
   }, [messagesLoaded, messages.length]);
 
-  // Reset scroll flag when thread changes
+  // Reset flags when thread changes
   useEffect(() => {
     hasScrolledToBottomRef.current = false;
+    isInConversationRef.current = false;
   }, [threadId]);
 
   // Handle job state snapshots from context (when subscribing to a thread)
@@ -1142,6 +1147,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
     // Invalidate cache since we're adding new messages
     invalidateMessageCache(threadId);
+
+    // Mark that user is in an active conversation (prevents scroll-to-bottom on message updates)
+    isInConversationRef.current = true;
 
     // OPTIMISTIC UI: Show message immediately before API call
     setMessages((prev) => [
