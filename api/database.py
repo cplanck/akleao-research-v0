@@ -865,6 +865,10 @@ def _run_incremental_migrations():
                 # Refresh columns list
                 columns = [col["name"] for col in inspector.get_columns("resources")]
 
+                # Detect database type for correct datetime syntax
+                is_postgres = 'postgresql' in str(engine.url)
+                datetime_type = "TIMESTAMP" if is_postgres else "DATETIME"
+
                 if "error_stage" not in columns:
                     conn.execute(text("ALTER TABLE resources ADD COLUMN error_stage VARCHAR"))
                     print("[Migration] Added error_stage column to resources")
@@ -878,7 +882,7 @@ def _run_incremental_migrations():
                     print("[Migration] Added storage_backend column to resources")
 
                 if "extracted_at" not in columns:
-                    conn.execute(text("ALTER TABLE resources ADD COLUMN extracted_at DATETIME"))
+                    conn.execute(text(f"ALTER TABLE resources ADD COLUMN extracted_at {datetime_type}"))
                     print("[Migration] Added extracted_at column to resources")
 
                 if "extraction_duration_ms" not in columns:
