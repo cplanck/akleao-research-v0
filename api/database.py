@@ -13,26 +13,25 @@ def get_database_url() -> str:
     """Get database URL from environment variables.
 
     Supports:
-    - DATABASE_URL: Direct connection string (e.g., postgresql://user:pass@host/db or sqlite:///./akleao.db)
+    - DATABASE_URL: Direct connection string (e.g., postgresql://user:pass@host/db)
     - DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT: Component-based PostgreSQL config
-    - Fallback: SQLite for local development
+    - Fallback: Local PostgreSQL (Docker) with dev credentials
+
+    We always use PostgreSQL (both dev and prod) to avoid SQLite/PostgreSQL mismatches.
+    Local dev uses PostgreSQL running in Docker on localhost:5432.
     """
     # Direct connection string takes priority
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         return database_url
 
-    # Component-based PostgreSQL connection
-    db_host = os.getenv("DB_HOST")
-    if db_host:
-        db_user = os.getenv("DB_USER", "postgres")
-        db_password = os.getenv("DB_PASSWORD", "")
-        db_name = os.getenv("DB_NAME", "akleao")
-        db_port = os.getenv("DB_PORT", "5432")
-        return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-
-    # Default: SQLite for local development
-    return "sqlite:///./akleao.db"
+    # Component-based PostgreSQL connection with local dev defaults
+    db_host = os.getenv("DB_HOST", "localhost")  # Default to localhost for local dev
+    db_user = os.getenv("DB_USER", "akleao")
+    db_password = os.getenv("DB_PASSWORD", "akleao_dev")
+    db_name = os.getenv("DB_NAME", "akleao")
+    db_port = os.getenv("DB_PORT", "5432")
+    return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
 
 def create_db_engine(database_url: str):

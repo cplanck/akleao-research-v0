@@ -1,4 +1,21 @@
 services:
+  # PostgreSQL database (matches production)
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=akleao
+      - POSTGRES_PASSWORD=akleao_dev
+      - POSTGRES_DB=akleao
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akleao -d akleao"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # Redis for Celery broker and result backend
   redis:
     image: redis:7-alpine
@@ -20,7 +37,15 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # PostgreSQL connection (matches production setup)
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=akleao
+      - DB_USER=akleao
+      - DB_PASSWORD=akleao_dev
+      # Redis
       - REDIS_URL=redis://redis:6379/0
+      # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PINECONE_API_KEY=${PINECONE_API_KEY}
@@ -34,8 +59,9 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
-      - ./akleao.db:/app/akleao.db
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -51,7 +77,15 @@ services:
       dockerfile: Dockerfile
     command: celery -A api.tasks worker --loglevel=info --concurrency=4
     environment:
+      # PostgreSQL connection (matches production setup)
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=akleao
+      - DB_USER=akleao
+      - DB_PASSWORD=akleao_dev
+      # Redis
       - REDIS_URL=redis://redis:6379/0
+      # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PINECONE_API_KEY=${PINECONE_API_KEY}
@@ -60,8 +94,9 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
-      - ./akleao.db:/app/akleao.db
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       api:
@@ -81,4 +116,5 @@ services:
         condition: service_healthy
 
 volumes:
+  postgres_data:
   redis_data:
