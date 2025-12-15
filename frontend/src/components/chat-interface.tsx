@@ -583,6 +583,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingRef = useRef<string>("");
   const sourcesRef = useRef<SourceInfo[]>([]);
+  const pendingUpdateRef = useRef<boolean>(false);  // Track if we have a pending RAF update
+  const rafIdRef = useRef<number | null>(null);  // RAF handle for cleanup
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const hasGeneratedTitleRef = useRef(false);  // Track if we've generated a title for this thread
   const chatContainerRef = useRef<HTMLDivElement>(null);  // Ref for the chat container (for text selection menu)
@@ -888,11 +890,21 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
         const content = event.content || "";
         streamingRef.current += content;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === `job-${currentJobId}` ? { ...m, content: streamingRef.current } : m
-          )
-        );
+
+        // Batch updates using requestAnimationFrame for smoother streaming
+        // This prevents updating React state on every single token
+        if (!pendingUpdateRef.current) {
+          pendingUpdateRef.current = true;
+          rafIdRef.current = requestAnimationFrame(() => {
+            pendingUpdateRef.current = false;
+            const currentContent = streamingRef.current;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === `job-${currentJobId}` ? { ...m, content: currentContent } : m
+              )
+            );
+          });
+        }
         break;
       }
 
@@ -920,6 +932,13 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         // This prevents a late "done" from job 1 clearing state for job 2
         if (!currentJobId) return;
 
+        // Cancel any pending RAF update
+        if (rafIdRef.current) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        pendingUpdateRef.current = false;
+
         // Reload messages from DB to get the final saved message and update cache
         listMessages(projectId, threadId)
           .then((msgs) => {
@@ -941,6 +960,13 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         // Only process error if we have an active job
         if (!currentJobId) return;
 
+        // Cancel any pending RAF update
+        if (rafIdRef.current) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        pendingUpdateRef.current = false;
+
         const errorMessage = event.message || "Unknown error";
         console.error(`[ChatInterface] Job error: ${errorMessage}`);
         toast.error(`Response failed: ${errorMessage}`);
@@ -953,6 +979,15 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       }
     }
   }, [currentJobEvent, projectId, threadId, transformMessages]);
+
+  // Cleanup RAF on unmount
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
 
   // Check for active job on mount and ensure it's running
   // State is derived from currentJobState via WebSocket - this just ensures job is started
