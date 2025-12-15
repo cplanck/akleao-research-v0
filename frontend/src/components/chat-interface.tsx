@@ -1290,7 +1290,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
-              const scrollMargin = parentThreadId ? '80px' : '16px';
+              // Using generous values to ensure previous messages are pushed off-screen
+              const scrollMargin = parentThreadId ? '100px' : '24px';
 
               return (
               <div
