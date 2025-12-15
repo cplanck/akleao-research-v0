@@ -1151,23 +1151,11 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     ]);
 
     // Scroll user's message to top of viewport (like ChatGPT/Claude)
-    // Two-step: scrollIntoView first, then adjust for sticky banner
+    // scroll-margin-top on message elements handles the sticky banner offset
     setTimeout(() => {
       const userMessageEl = document.getElementById(`message-${tempId}`);
-      const scrollContainer = scrollRef.current;
-      const banner = document.getElementById('subthread-banner');
-
-      if (userMessageEl && scrollContainer) {
-        // Step 1: Scroll message to very top (will be behind banner if in subthread)
+      if (userMessageEl) {
         userMessageEl.scrollIntoView({ block: 'start', behavior: 'instant' });
-
-        // Step 2: If there's a sticky banner, scroll UP to push message below it
-        if (banner) {
-          const bannerHeight = banner.offsetHeight;
-          const padding = 12;
-          // Scrolling UP (decreasing scrollTop) pushes content DOWN
-          scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - bannerHeight - padding);
-        }
       }
     }, 50);
 
@@ -1322,7 +1310,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
-              const scrollMargin = parentThreadId ? '100px' : '24px';
+              // Banner is ~63px, so 72px puts message 9px below it
+              const scrollMargin = parentThreadId ? '72px' : '16px';
 
               return (
               <div
