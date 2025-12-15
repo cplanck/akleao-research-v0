@@ -120,16 +120,15 @@
     @apply bg-background text-foreground;
     /* Disable overscroll bounce on mobile/tablet */
     overscroll-behavior: none;
-    -webkit-overflow-scrolling: touch;
   }
   html {
-    /* Prevent pull-to-refresh and bounce on iOS */
-    overflow: hidden;
     height: 100%;
   }
   body {
-    overflow: auto;
     height: 100%;
+    /* Allow scrolling but contain overscroll */
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
   }
 }
 

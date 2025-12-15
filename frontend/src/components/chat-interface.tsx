@@ -775,10 +775,10 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     sourcesRef.current = [];
     currentJobIdRef.current = null;
 
-    // Focus input when thread changes (desktop only - mobile keyboard is distracting)
+    // Focus input when thread changes (desktop only - mobile/tablet keyboard is distracting)
     // Check window width directly since isMobile state may not be updated yet
     setTimeout(() => {
-      if (window.innerWidth >= 768) {
+      if (window.innerWidth >= 1400) {
         inputRef.current?.focus();
       }
     }, 100);
@@ -1040,7 +1040,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   // Focus input when a question is asked (desktop only)
   useEffect(() => {
     // Check window width directly since isMobile state may lag
-    if (window.innerWidth < 768) return;  // Skip on mobile to avoid keyboard popup
+    if (window.innerWidth < 1400) return;  // Skip on mobile/tablet to avoid keyboard popup
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.isQuestion && !isLoading && inputRef.current) {
       inputRef.current.focus();
