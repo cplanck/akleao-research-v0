@@ -554,8 +554,47 @@ function useIsMobile(breakpoint: number = 768) {
   return isMobile;
 }
 
+// Custom hook to detect keyboard height using Visual Viewport API
+function useKeyboardHeight() {
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    // Only run on client and if visualViewport is supported
+    if (typeof window === "undefined" || !window.visualViewport) {
+      return;
+    }
+
+    const viewport = window.visualViewport;
+
+    const handleResize = () => {
+      // Calculate keyboard height as difference between window height and visual viewport
+      const windowHeight = window.innerHeight;
+      const viewportHeight = viewport.height;
+      const newKeyboardHeight = Math.max(0, windowHeight - viewportHeight);
+
+      // Only consider it a keyboard if it's substantial (> 100px)
+      // This avoids false positives from browser chrome changes
+      setKeyboardHeight(newKeyboardHeight > 100 ? newKeyboardHeight : 0);
+    };
+
+    viewport.addEventListener("resize", handleResize);
+    viewport.addEventListener("scroll", handleResize);
+
+    // Initial check
+    handleResize();
+
+    return () => {
+      viewport.removeEventListener("resize", handleResize);
+      viewport.removeEventListener("scroll", handleResize);
+    };
+  }, []);
+
+  return keyboardHeight;
+}
+
 export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId, contextText, ancestorThreads = [], onResourceAdded, onThreadTitleGenerated, onNavigateToThread, resources = [], rules = [], onRulesChange, isRulesDialogOpen: externalIsRulesDialogOpen, onRulesDialogOpenChange, onFindingSaved }: ChatInterfaceProps) {
   const isMobile = useIsMobile();
+  const keyboardHeight = useKeyboardHeight();
   // Get WebSocket state and cache functions from context
   const { subscribeToThread, currentJobState, currentJobEvent, getCachedMessages, setCachedMessages, invalidateMessageCache } = useProject();
 
@@ -1451,7 +1490,10 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const lastMessage = messages[messages.length - 1];
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
-          <div className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom),env(keyboard-inset-bottom,0px))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background transition-[padding] duration-200">
+          <div
+            className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background transition-[padding] duration-150"
+            style={keyboardHeight > 0 ? { paddingBottom: `${keyboardHeight + 6}px` } : undefined}
+          >
               {/* Floating input container */}
               <div className="border border-border bg-card rounded-xl shadow-sm overflow-hidden">
                 {/* Single row input on mobile, two rows on desktop */}
