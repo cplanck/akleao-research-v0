@@ -270,10 +270,13 @@ export function FindingsDialog({
     }
   };
 
+  // State for mobile tab view
+  const [activeTab, setActiveTab] = useState<"findings" | "summary">("summary");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl h-[70vh] flex flex-col p-0">
-        <DialogHeader className="px-6 py-4 border-b">
+      <DialogContent className="w-[95vw] max-w-4xl h-[85vh] sm:h-[70vh] flex flex-col p-0">
+        <DialogHeader className="px-4 sm:px-6 py-3 sm:py-4 border-b flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <BookmarkIcon className="w-5 h-5 text-muted-foreground" />
             Key Findings
@@ -285,9 +288,33 @@ export function FindingsDialog({
           </DialogTitle>
         </DialogHeader>
 
+        {/* Mobile tabs */}
+        <div className="sm:hidden flex border-b flex-shrink-0">
+          <button
+            onClick={() => setActiveTab("summary")}
+            className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "summary"
+                ? "border-b-2 border-primary text-foreground"
+                : "text-muted-foreground"
+            }`}
+          >
+            Summary
+          </button>
+          <button
+            onClick={() => setActiveTab("findings")}
+            className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "findings"
+                ? "border-b-2 border-primary text-foreground"
+                : "text-muted-foreground"
+            }`}
+          >
+            Findings ({findings.length})
+          </button>
+        </div>
+
         <div className="flex-1 flex overflow-hidden">
-          {/* Left pane - Findings list */}
-          <div className="w-1/3 border-r flex flex-col">
+          {/* Left pane - Findings list (hidden on mobile unless tab selected) */}
+          <div className={`${activeTab === "findings" ? "flex" : "hidden"} sm:flex w-full sm:w-1/3 border-r flex-col`}>
             <div className="flex-1 overflow-y-auto p-2">
               {isLoading ? (
                 <div className="text-xs text-muted-foreground text-center py-4">
@@ -325,7 +352,7 @@ export function FindingsDialog({
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                          className="h-5 w-5 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-destructive/70 hover:text-destructive hover:bg-destructive/10"
                           title="Delete finding"
                           onClick={() => handleDelete(finding.id)}
                         >
@@ -339,8 +366,8 @@ export function FindingsDialog({
             </div>
           </div>
 
-          {/* Right pane - Summary */}
-          <div className="flex-1 flex flex-col">
+          {/* Right pane - Summary (hidden on mobile unless tab selected) */}
+          <div className={`${activeTab === "summary" ? "flex" : "hidden"} sm:flex flex-1 flex-col`}>
             <div className="flex-1 overflow-y-auto p-4 relative">
               {findings.length > 0 && (
                 <Button
@@ -381,14 +408,14 @@ export function FindingsDialog({
 
         {/* Footer - Export options */}
         {summary && (
-          <div className="border-t p-4 bg-muted/30">
-            <div className="flex items-center gap-2">
+          <div className="border-t p-3 sm:p-4 bg-muted/30 flex-shrink-0">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleCopy}
-                  className="h-9"
+                  className="h-9 flex-1 sm:flex-none"
                   title="Copy to clipboard"
                 >
                   <CopyIcon className="w-4 h-4 mr-1.5" />
@@ -398,30 +425,32 @@ export function FindingsDialog({
                   variant="outline"
                   size="sm"
                   onClick={handleDownload}
-                  className="h-9"
+                  className="h-9 flex-1 sm:flex-none"
                   title="Download as file"
                 >
                   <DownloadIcon className="w-4 h-4 mr-1.5" />
                   Download
                 </Button>
               </div>
-              <div className="flex-1" />
-              <Input
-                type="email"
-                placeholder="email@example.com"
-                value={emailAddress}
-                onChange={(e) => setEmailAddress(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleEmail()}
-                className="h-9 w-56 text-sm"
-              />
-              <Button
-                onClick={handleEmail}
-                disabled={isEmailing || !emailAddress.trim()}
-                className="h-9"
-              >
-                <MailIcon className="w-4 h-4 mr-1.5" />
-                {isEmailing ? "Sending..." : "Email"}
-              </Button>
+              <div className="hidden sm:block flex-1" />
+              <div className="flex items-center gap-2">
+                <Input
+                  type="email"
+                  placeholder="email@example.com"
+                  value={emailAddress}
+                  onChange={(e) => setEmailAddress(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleEmail()}
+                  className="h-9 flex-1 sm:w-56 text-sm"
+                />
+                <Button
+                  onClick={handleEmail}
+                  disabled={isEmailing || !emailAddress.trim()}
+                  className="h-9"
+                >
+                  <MailIcon className="w-4 h-4 sm:mr-1.5" />
+                  <span className="hidden sm:inline">{isEmailing ? "Sending..." : "Email"}</span>
+                </Button>
+              </div>
             </div>
           </div>
         )}

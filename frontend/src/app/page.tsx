@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { UserAvatar } from "@/components/user-avatar";
 import { Project, listProjects, createProject, deleteProject, createThread } from "@/lib/api";
 import Link from "next/link";
@@ -188,7 +187,6 @@ export default function Home() {
                 Library
               </Button>
             </Link>
-            <ThemeToggle />
             <UserAvatar />
           </div>
         </div>

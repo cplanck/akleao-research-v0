@@ -11,6 +11,11 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { MarkdownContent } from "@/components/markdown-content";
 import { SourceInfo, listMessages, addUrlResource, getResourceFileUrl, Resource, generateThreadTitle, createFinding, createChildThread, Thread, ChildThreadInfo, createJob, getActiveJob, startJob } from "@/lib/api";
@@ -410,7 +415,6 @@ function AgentStatusPanel({
         <div className="mb-3">
           <p className="text-foreground">
             {acknowledgment}
-            <span className="inline-block w-1.5 h-4 bg-current ml-1 animate-pulse opacity-70" />
           </p>
         </div>
       )}
@@ -1447,11 +1451,11 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const lastMessage = messages[messages.length - 1];
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
-          <div className="flex-shrink-0 p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background">
+          <div className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background">
               {/* Floating input container */}
-              <div className="border border-border bg-card rounded-lg shadow-sm overflow-hidden">
-                {/* Input row */}
-                <div className="flex items-end gap-2 p-2 pb-0">
+              <div className="border border-border bg-card rounded-xl shadow-sm overflow-hidden">
+                {/* Single row input on mobile, two rows on desktop */}
+                <div className="flex items-end gap-1.5 p-1.5 sm:p-2 sm:pb-0">
                   <Textarea
                     ref={inputRef}
                     autoFocus
@@ -1464,12 +1468,94 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                         handleSubmit();
                       }
                     }}
-                    className="min-h-[40px] max-h-[200px] resize-none flex-1 text-base md:text-sm border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
+                    className="min-h-[36px] sm:min-h-[40px] max-h-[200px] resize-none flex-1 text-[15px] sm:text-sm border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none py-1.5 px-2"
                     rows={1}
                   />
+                  {/* Mobile: Icon buttons inline */}
+                  <div className="flex items-center gap-1 sm:hidden pb-0.5">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          className={`h-9 w-9 flex items-center justify-center rounded-lg transition-colors relative shrink-0 ${
+                            contextOnly
+                              ? "bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                              : "bg-muted/50 text-muted-foreground active:bg-muted"
+                          }`}
+                          title="Search settings"
+                        >
+                          <svg
+                            className="w-[18px] h-[18px]"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={1.75}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                          {contextOnly && (
+                            <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500" />
+                          )}
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-44 p-1.5" align="end" sideOffset={8}>
+                        <button
+                          onClick={() => setContextOnly(!contextOnly)}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                            contextOnly
+                              ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                              : "hover:bg-muted"
+                          }`}
+                        >
+                          <svg
+                            className="w-4 h-4 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                          Docs only
+                          {contextOnly && (
+                            <svg className="w-4 h-4 ml-auto shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </button>
+                      </PopoverContent>
+                    </Popover>
+                    <button
+                      onClick={handleSubmit}
+                      disabled={isLoading || !input.trim()}
+                      className={`h-9 w-9 flex items-center justify-center rounded-lg transition-colors shrink-0 disabled:opacity-40 ${
+                        isRespondMode
+                          ? "bg-violet-600 text-white active:bg-violet-700"
+                          : "bg-primary text-primary-foreground active:bg-primary/90"
+                      }`}
+                      title={isRespondMode ? "Reply" : "Send"}
+                    >
+                      {isRespondMode ? (
+                        <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                        </svg>
+                      ) : (
+                        <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                 </div>
-                {/* Action buttons row */}
-                <div className="flex items-center justify-between px-2 pb-2 pt-1">
+                {/* Desktop: Full action buttons row */}
+                <div className="hidden sm:flex items-center justify-between px-2 pb-2">
                   <button
                     onClick={() => setContextOnly(!contextOnly)}
                     className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
@@ -1477,7 +1563,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                         ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     }`}
-                    title={contextOnly ? "Only answering from your documents" : "Click to restrict answers to documents only"}
+                    title={contextOnly ? "Only answering from documents" : "Click to restrict answers to documents only"}
                   >
                     <svg
                       className="w-3.5 h-3.5"

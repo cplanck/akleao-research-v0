@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, memo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -449,17 +449,75 @@ function LinkWithPopover({
   );
 }
 
+/**
+ * Split content into stable blocks (complete paragraphs) and an active block (being streamed).
+ * Stable blocks end with double newlines and won't change during streaming.
+ */
+function splitIntoBlocks(content: string): { stableBlocks: string[]; activeBlock: string } {
+  // Split on double newlines (paragraph breaks)
+  const parts = content.split(/\n\n+/);
+
+  if (parts.length <= 1) {
+    // No complete paragraphs yet - everything is active
+    return { stableBlocks: [], activeBlock: content };
+  }
+
+  // All but the last part are stable (they ended with \n\n)
+  const stableBlocks = parts.slice(0, -1).map(p => p.trim()).filter(p => p.length > 0);
+  const activeBlock = parts[parts.length - 1];
+
+  return { stableBlocks, activeBlock };
+}
+
+/**
+ * Memoized markdown block - only re-renders when its content changes.
+ * This is crucial for streaming performance.
+ */
+const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
+  content,
+  onAddUrl,
+  components
+}: {
+  content: string;
+  onAddUrl?: (url: string) => Promise<void>;
+  components: Components;
+}) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 export function MarkdownContent({ content, onAddUrl, isStreaming = false }: MarkdownContentProps) {
-  // When streaming, process content to extract incomplete code blocks
-  const { displayContent, incompleteCodeBlock } = useMemo(() => {
+  // Cache for stable blocks - persists across renders
+  const stableBlocksCache = useRef<Map<string, string>>(new Map());
+
+  // When streaming, process content to extract incomplete code blocks and split into blocks
+  const { stableBlocks, activeBlock, incompleteCodeBlock } = useMemo(() => {
     if (isStreaming) {
       const processed = processStreamingContent(content);
-      return { displayContent: processed.content, incompleteCodeBlock: processed.incompleteCodeBlock };
+      const { stableBlocks, activeBlock } = splitIntoBlocks(processed.content);
+      return {
+        stableBlocks,
+        activeBlock: processStreamingContent(activeBlock).content, // Clean up active block too
+        incompleteCodeBlock: processed.incompleteCodeBlock
+      };
     }
-    return { displayContent: content, incompleteCodeBlock: null };
+    return { stableBlocks: [], activeBlock: content, incompleteCodeBlock: null };
   }, [content, isStreaming]);
 
-  const components: Components = {
+  // Build stable block keys for memoization (content hash as key)
+  const stableBlockKeys = useMemo(() => {
+    return stableBlocks.map((block, i) => {
+      // Use content as key - if content matches, it's the same block
+      const key = `block-${i}-${block.slice(0, 50)}`;
+      stableBlocksCache.current.set(key, block);
+      return key;
+    });
+  }, [stableBlocks]);
+
+  const components: Components = useMemo(() => ({
     code({ node, className, children, ...props }) {
       const match = /language-(\w+)/.exec(className || "");
       const isInline = !match && !String(children).includes("\n");
@@ -529,13 +587,25 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
     td({ children }) {
       return <td className="border border-border px-2 py-1">{children}</td>;
     },
-  };
+  }), [onAddUrl]);
 
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
-        {displayContent}
-      </ReactMarkdown>
+      {/* Render stable blocks - these are memoized and won't re-render */}
+      {isStreaming && stableBlocks.map((block, i) => (
+        <MemoizedMarkdownBlock
+          key={stableBlockKeys[i]}
+          content={block}
+          onAddUrl={onAddUrl}
+          components={components}
+        />
+      ))}
+      {/* Render active block - this re-renders on each token */}
+      {(activeBlock || !isStreaming) && (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
+          {isStreaming ? activeBlock : content}
+        </ReactMarkdown>
+      )}
       {/* Render incomplete code block separately with streaming indicator */}
       {incompleteCodeBlock && (
         <CodeBlock language={incompleteCodeBlock.language} isStreaming>

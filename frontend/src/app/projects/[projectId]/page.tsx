@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { ResourcePanel } from "@/components/resource-panel";
 import { FindingsDialog } from "@/components/findings-dialog";
 import { ChatInterface } from "@/components/chat-interface";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -116,6 +115,53 @@ function LibraryIcon({ className }: { className?: string }) {
       <path d="M12 6v14" />
       <path d="M8 8v12" />
       <path d="M4 4v16" />
+    </svg>
+  );
+}
+
+// Findings icon (lightbulb)
+function FindingsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+      <path d="M9 18h6" />
+      <path d="M10 22h4" />
+    </svg>
+  );
+}
+
+// Rules icon (list with checkmarks)
+function RulesIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M3.5 5.5 5 7l2.5-2.5" />
+      <path d="M3.5 11.5 5 13l2.5-2.5" />
+      <path d="M3.5 17.5 5 19l2.5-2.5" />
+      <path d="M11 6h9" />
+      <path d="M11 12h9" />
+      <path d="M11 18h9" />
     </svg>
   );
 }
@@ -665,72 +711,68 @@ export default function ProjectPage() {
                 </Button>
               </SheetTrigger>
               <SheetContent side="right" className="w-[300px] p-0">
-                <SheetHeader className="p-3 border-b">
-                  <SheetTitle className="flex items-center justify-between text-sm font-semibold">
-                    <span>Resources</span>
-                    <div className="flex items-center gap-1">
-                      <Link href="/library">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0"
-                          title="View Resource Library"
-                        >
-                          <LibraryIcon className="h-4 w-4" />
-                        </Button>
-                      </Link>
-                      {selectedProject && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => {
-                            setResourceSheetOpen(false);
-                            setIsRulesDialogOpen(true);
-                          }}
-                        >
-                          Rules
-                          {parseRules(selectedProject.system_instructions).length > 0 && (
-                            <span className="ml-1 bg-primary/10 text-primary rounded px-1">
-                              {parseRules(selectedProject.system_instructions).length}
-                            </span>
-                          )}
-                        </Button>
-                      )}
-                      {selectedProject && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => {
-                            setResourceSheetOpen(false);
-                            setIsFindingsDialogOpen(true);
-                          }}
-                        >
-                          Findings
-                        </Button>
-                      )}
-                      {selectedProject && (
-                        <NotificationBell
-                          projectId={selectedProject.id}
-                          onNavigateToThread={(threadId) => {
-                            // Find the thread and navigate to it
-                            const thread = selectedProject.threads.find(t => t.id === threadId);
-                            if (thread) {
-                              handleNavigateToThreadWithUrl(thread);
-                            } else {
-                              // If thread not found in current list, navigate directly
-                              router.push(`/projects/${selectedProject.id}/threads/${threadId}`);
-                            }
-                          }}
-                        />
-                      )}
-                      <ThemeToggle />
-                      <UserAvatar size="sm" />
-                    </div>
+                <SheetHeader className="px-3 py-2 border-b">
+                  <SheetTitle className="flex items-center justify-end gap-1">
+                    <Link href="/library">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        title="Resource Library"
+                      >
+                        <LibraryIcon className="h-4 w-4" />
+                      </Button>
+                    </Link>
+                    {selectedProject && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 relative"
+                        title="Rules"
+                        onClick={() => {
+                          setResourceSheetOpen(false);
+                          setIsRulesDialogOpen(true);
+                        }}
+                      >
+                        <RulesIcon className="h-4 w-4" />
+                        {parseRules(selectedProject.system_instructions).length > 0 && (
+                          <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[10px] rounded-full h-4 w-4 flex items-center justify-center">
+                            {parseRules(selectedProject.system_instructions).length}
+                          </span>
+                        )}
+                      </Button>
+                    )}
+                    {selectedProject && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        title="Findings"
+                        onClick={() => {
+                          setResourceSheetOpen(false);
+                          setIsFindingsDialogOpen(true);
+                        }}
+                      >
+                        <FindingsIcon className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {selectedProject && (
+                      <NotificationBell
+                        projectId={selectedProject.id}
+                        onNavigateToThread={(threadId) => {
+                          setResourceSheetOpen(false);
+                          const thread = selectedProject.threads.find(t => t.id === threadId);
+                          if (thread) {
+                            handleNavigateToThreadWithUrl(thread);
+                          } else {
+                            router.push(`/projects/${selectedProject.id}/threads/${threadId}`);
+                          }
+                        }}
+                      />
+                    )}
                   </SheetTitle>
                 </SheetHeader>
-                <div className="p-3 h-[calc(100%-53px)]">
+                <div className="p-3 h-[calc(100%-45px)]">
                   {selectedProject ? (
                     <ResourcePanel
                       projectId={selectedProject.id}
@@ -745,6 +787,7 @@ export default function ProjectPage() {
                 </div>
               </SheetContent>
             </Sheet>
+            <UserAvatar size="sm" />
           </div>
         </div>
 
@@ -814,6 +857,19 @@ export default function ProjectPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Findings Dialog - Mobile */}
+        {selectedProject && (
+          <FindingsDialog
+            projectId={selectedProject.id}
+            projectName={selectedProject.name}
+            existingSummary={selectedProject.findings_summary}
+            summaryUpdatedAt={selectedProject.findings_summary_updated_at}
+            open={isFindingsDialogOpen}
+            onOpenChange={setIsFindingsDialogOpen}
+            onSummaryUpdated={() => fetchProjectDetail(selectedProject.id, false)}
+          />
+        )}
       </div>
     );
   }
@@ -1016,7 +1072,6 @@ export default function ProjectPage() {
                           }
                         }}
                       />
-                      <ThemeToggle />
                       <UserAvatar size="sm" />
                     </div>
                   </div>

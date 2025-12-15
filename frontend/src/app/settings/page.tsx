@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserAvatar } from "@/components/user-avatar";
 import Link from "next/link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
@@ -88,7 +89,7 @@ export default function SettingsPage() {
             </Link>
             <h1 className="text-xl font-semibold">Settings</h1>
           </div>
-          <ThemeToggle />
+          <UserAvatar />
         </div>
       </header>
 

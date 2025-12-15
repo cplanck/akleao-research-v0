@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from anthropic import Anthropic
 
 from .retriever import Retriever, RetrievalResult
+from .tools import ToolContext, ToolExecutor, get_registry
 
 # Beta header for interleaved thinking with tool use
 INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
@@ -110,20 +111,21 @@ DEEP_THINKING_PATTERNS = [
 # V4 Feature: Regex Pre-Router for Instant Responses
 # ============================================================================
 # Patterns that can be handled instantly without LLM routing
+# Format: (regex, acknowledgment) for tool patterns, (regex, direct_response) for social
 INSTANT_PATTERNS = {
     # Social - instant response, no tools needed
     "social": [
-        (r"^(hi|hello|hey|howdy)[\s!.?]*$", "Hi! How can I help you with your research today?"),
-        (r"^(thanks|thank you|thx|ty)[\s!.?]*$", "You're welcome! Let me know if you need anything else."),
+        (r"^(hi|hello|hey|howdy)[\s!.?]*$", "Hi! What are we diving into today?"),
+        (r"^(thanks|thank you|thx|ty)[\s!.?]*$", "Happy to help! What else should we look at?"),
         (r"^(bye|goodbye|see ya|later|take care)[\s!.?]*$", "Goodbye! Feel free to come back anytime."),
-        (r"^(ok|okay|cool|great|perfect|awesome|nice|got it|understood)[\s!.?]*$", "Great! What would you like to explore next?"),
+        (r"^(ok|okay|cool|great|perfect|awesome|nice|got it|understood)[\s!.?]*$", "Great! What should we explore next?"),
     ],
     # Resource queries - trigger list_resources tool directly
     "resource_query": [
-        r"^what (files|documents|resources|data) do i have",
-        r"^(show|list) (my |me )?(files|documents|resources|uploads)",
-        r"^what('s| is) in my (workspace|project)",
-        r"^what (do i have|have i) (uploaded|added)",
+        (r"^what (files|documents|resources|data) do i have", "Let's see what files we have"),
+        (r"^(show|list) (my |me )?(files|documents|resources|uploads)", "Let's pull up the files"),
+        (r"^what('s| is) in my (workspace|project)", "Let's see what's in the workspace"),
+        (r"^what (do i have|have i) (uploaded|added)", "Let's check what's been uploaded"),
     ],
 }
 
@@ -138,33 +140,34 @@ def pre_route(message: str) -> RequestPlanV3 | None:
     for category, patterns in INSTANT_PATTERNS.items():
         for pattern in patterns:
             if isinstance(pattern, tuple):
-                # Pattern with direct response
-                regex, response = pattern
+                regex, text = pattern
                 if re.match(regex, msg_lower, re.IGNORECASE):
-                    return RequestPlanV3(
-                        category=category,
-                        acknowledgment="",
-                        thinking_budget=0,
-                        search_strategy="none",
-                        complexity="instant",
-                        needs_tools=False,
-                        direct_response=response,
-                        intent_mode="action",
-                        response_style="conversational"
-                    )
-            else:
-                # Pattern that triggers a specific tool
-                if re.match(pattern, msg_lower, re.IGNORECASE):
-                    return RequestPlanV3(
-                        category=category,
-                        acknowledgment="",
-                        thinking_budget=0,
-                        search_strategy="none" if category != "resource_query" else "docs",
-                        complexity="simple",
-                        needs_tools=(category == "resource_query"),
-                        intent_mode="action",
-                        response_style="structured"
-                    )
+                    if category == "social":
+                        # Social patterns: text is direct_response
+                        return RequestPlanV3(
+                            category=category,
+                            acknowledgment="",
+                            thinking_budget=0,
+                            search_strategy="none",
+                            complexity="instant",
+                            needs_tools=False,
+                            direct_response=text,
+                            intent_mode="action",
+                            response_style="conversational"
+                        )
+                    else:
+                        # Tool patterns: text is acknowledgment
+                        return RequestPlanV3(
+                            category=category,
+                            acknowledgment=text,
+                            thinking_budget=0,
+                            search_strategy="docs" if category == "resource_query" else "none",
+                            complexity="simple",
+                            needs_tools=True,
+                            direct_response=None,
+                            intent_mode="action",
+                            response_style="structured"
+                        )
 
     return None  # Fall through to LLM router
 
@@ -663,8 +666,8 @@ Examples of BAD acknowledgments (too generic):
 - "Looking into it..." ❌
 
 For document searches:
-- If a filename/summary clearly matches the topic, be confident: "Searching your product datasheet for pinout info..."
-- If no obvious match, still be specific about the topic: "Searching your workspace for Feather M0 information..."
+- If a filename/summary clearly matches the topic, be confident: "Let's check the product datasheet for pinout info..."
+- If no obvious match, still be specific about the topic: "Let's search the workspace for Feather M0 information..."
 
 For simple chat (greetings, thanks, etc.), use acknowledgment: "" (empty string).
 
@@ -720,7 +723,7 @@ You must respond with a JSON object (no other text) with these fields:
 CATEGORIES explained:
 
 1. "social" (instant, no tools) - Greetings, thanks, farewells
-   - "hi", "thanks", "bye" → direct_response: "Hi! How can I help you today?"
+   - "hi", "thanks", "bye" → direct_response: "Hi! What are we working on today?"
    - ALWAYS set direct_response for social
 
 2. "factual" (simple, no tools) - Simple facts the model knows
@@ -768,23 +771,26 @@ CONTEXT-AWARE DECISION MATRIX (only when user intent is ambiguous):
 
 ACKNOWLEDGMENT RULES (for doc_search/web_search/research/analysis):
 
+TONE: You are a collaborative PARTNER, not an assistant. Use "we/let's/our" not "I'll help you".
+Think of yourself as a smart colleague working alongside the user on their project.
+
 1. MATCH THE USER'S FRAMING - Don't always say "searching":
-   - "help me calculate buoyancy" → "Sure, I'll help you calculate buoyancy."
-   - "how do I wire the sensor?" → "I'll help you figure out the sensor wiring."
-   - "search my docs for pricing" → "Searching your documents for pricing info..."
+   - "help me calculate buoyancy" → "Sure, let's work out the buoyancy calculation."
+   - "how do I wire the sensor?" → "Let's figure out the sensor wiring."
+   - "search my docs for pricing" → "Searching our documents for pricing info..."
    - "find the pinout" → "Looking up the pinout information..."
-   - "what's the voltage range?" → "Let me find the voltage range specs."
+   - "what's the voltage range?" → "Let's find the voltage range specs."
 
 2. MATCH THE USER'S TONE - Mirror their energy and formality:
-   - Frustrated/terse: "voltage specs" → "Looking up voltage specs." (brief, no fluff)
-   - Casual: "hey can you find the pricing?" → "Sure, I'll look for the pricing info."
-   - Enthusiastic: "omg please help me find this!!" → "On it! Let me dig through your docs."
-   - Professional: "Please locate the authentication documentation" → "I'll search for the authentication documentation."
+   - Frustrated/terse: "voltage specs" → "Checking voltage specs." (brief, no fluff)
+   - Casual: "hey can you find the pricing?" → "Sure, let's find the pricing info."
+   - Enthusiastic: "omg please help me find this!!" → "On it! Let's dig through the docs."
+   - Professional: "Please locate the authentication documentation" → "Searching for the authentication documentation."
 
 3. READ THE ROOM FROM CONVERSATION HISTORY:
    If turn_count > 2, analyze the progression:
    - Messages getting SHORTER = user may be getting impatient → shorten your acknowledgment
-   - Repeated similar questions = user may be frustrated → acknowledge you'll try a different approach
+   - Repeated similar questions = user may be frustrated → acknowledge we'll try a different approach
    - Multiple follow-ups = keep acknowledgments brief, just get to work
    - First interaction = can be slightly warmer/more complete
 
@@ -798,17 +804,17 @@ ACKNOWLEDGMENT RULES (for doc_search/web_search/research/analysis):
    - Include the specific subject from their question
    - If matched_resource is set, mention the resource name
 
-GOOD acknowledgments:
-- "Sure, I'll help you calculate buoyancy." ✓ (help request → help response)
+GOOD acknowledgments (collaborative partner tone):
+- "Sure, let's work out the buoyancy calculation." ✓ (collaborative)
 - "Looking up the SAMD11 pinout..." ✓ (specific resource + topic)
-- "On it! Searching for pricing info." ✓ (matches enthusiastic tone)
+- "On it! Let's dig into the pricing info." ✓ (matches enthusiastic tone)
 - "Checking voltage specifications." ✓ (matches terse tone)
 
-BAD acknowledgments:
-- "Let me help you with that." ❌ (too generic)
-- "I'll look into that." ❌ (no topic)
+BAD acknowledgments (assistant/servant tone):
+- "Let me help you with that." ❌ (too generic, servant tone)
+- "I'll look into that for you." ❌ (servant tone, no topic)
 - "Searching..." ❌ (no topic)
-- "Searching your documents for buoyancy calculation..." ❌ (when user said "help me calculate", not "search for")
+- "I'll search your documents for buoyancy calculation..." ❌ (servant tone)
 
 RESOURCE MATCHING:
 - python_matched_resource: {python_matched_resource} (confidence: {python_match_confidence})
@@ -872,13 +878,13 @@ def build_router_prompt_v2(
 # V3 Router System Prompt (Intent-Aware)
 # ============================================================================
 
-ROUTER_SYSTEM_PROMPT_V3 = """You are a request router with intent detection. Analyze the user's message to determine both WHAT they want and HOW they're approaching it.
+ROUTER_SYSTEM_PROMPT_V3 = """You are a request router with intent detection. Analyze the user's message AND conversation history to determine both WHAT they want and HOW they're approaching it.
 
 You must respond with a JSON object (no other text) with these fields:
 
-## Required fields (from V2):
-- category: one of "social", "factual", "clarification", "doc_search", "web_search", "research", "analysis", "conversation", "resource_query"
-- acknowledgment: Brief sentence describing what you're about to do (empty for social/factual/clarification)
+## Required fields:
+- category: one of "social", "factual", "clarification", "doc_search", "web_search", "research", "analysis", "conversation", "resource_query", "image_query", "data_query"
+- acknowledgment: Collaborative action statement using "we/let's/our" (empty for social/factual/clarification). You are a PARTNER, not an assistant.
 - complexity: one of "instant", "simple", "moderate", "complex"
 - search_strategy: one of "none", "docs", "web", "both"
 - matched_resource: resource name if query clearly targets one specific resource, else null
@@ -886,69 +892,95 @@ You must respond with a JSON object (no other text) with these fields:
 - direct_response: for social/clarification only - the actual response text
 - is_followup: true if this references prior conversation
 
-## New V3 fields:
+## V3 fields:
 - intent_mode: one of "exploratory", "action", "mixed"
 - intent_confidence: 0.0-1.0 confidence in intent classification
 - response_style: one of "conversational", "structured", "report"
 - suggested_followups: array of 1-3 follow-up questions (for exploratory mode only, else null)
 
-## NEW CATEGORY: "resource_query"
-Use this when user asks about their workspace/files without a specific search:
+## ACKNOWLEDGMENT RULES (CRITICAL):
+You are a collaborative PARTNER working alongside the user. Use "we/let's/our" language:
+✓ GOOD: "Let's take a look at that image"
+✓ GOOD: "Let's search the documents for pricing info"
+✓ GOOD: "Let's dig into the sales data"
+✓ GOOD: "Let's see what files we have"
+✗ BAD: "I'll help you with that" (servant tone)
+✗ BAD: "Let me search your documents for you" (assistant tone)
+✗ BAD: "I'll look into that for you" (not collaborative)
+
+## CATEGORIES:
+
+### resource_query
+Use when user asks about their workspace/files without a specific search:
 - "what files do I have?", "show my documents", "what's in my workspace?"
-- "tell me about my resources", "list my uploads"
-→ This triggers list_resources tool, NOT search_documents
+→ Triggers list_resources tool
 
-## INTENT DETECTION (Critical for V3):
+### image_query
+Use when user asks about a specific image in their resources:
+- "tell me about the image", "what's in that picture", "describe the screenshot"
+- ESPECIALLY for follow-ups like "tell me more about the image" after discussing an image
+→ Triggers view_image tool
+→ matched_resource should be the image name
 
-### EXPLORATORY signals (user is learning/exploring):
-- Questions: "what if...", "I wonder...", "I'm curious about...", "help me understand..."
-- Open-ended: "tell me about...", "what can you tell me about...", "explore..."
-- Brainstorming: "ideas for...", "possibilities", "options", "what are some ways..."
-- Learning: "explain...", "how does X work?", "walk me through..."
-→ intent_mode: "exploratory"
-→ response_style: "conversational"
-→ Generate 1-3 suggested_followups to guide exploration
-→ Agent should: offer multiple angles, be thorough but invite follow-up
+### data_query
+Use when user asks about data files (CSV, Excel, JSON):
+- "analyze the sales data", "what's in the spreadsheet", "query the CSV"
+→ Triggers analyze_data tool
+→ matched_resource should be the data file name
 
-### ACTION signals (user wants specific output):
-- Imperatives: "find all...", "list...", "create...", "generate...", "summarize..."
-- Deliverables: "report on...", "comparison of...", "analysis of..."
-- Specificity: "the top 10...", "all X between...", "exact numbers for..."
-- Commands: "do X", "run X", "calculate X"
-→ intent_mode: "action"
-→ response_style: "structured" (or "report" for multi-part outputs)
+### doc_search
+Use for searching document content:
+- "find mentions of X", "what does my doc say about Y"
+→ Triggers search_documents tool
+
+### web_search
+Use ONLY when user explicitly wants web/internet info OR the topic is clearly external:
+- "search the web for...", "what's the latest news on..."
+- Current events, external facts not in their documents
+→ Do NOT use for follow-ups about resources they already have!
+
+## CONVERSATION CONTEXT (CRITICAL):
+When there's conversation history, you MUST consider what was previously discussed:
+- If user says "tell me more about X" and X was just discussed, use the same tool/resource
+- If user says "what about the image" after discussing an image, use image_query NOT web_search
+- If user asks a follow-up question, reference the same resource/context as before
+- Set is_followup: true for ANY message that references prior conversation
+
+{conversation_context}
+
+## INTENT DETECTION:
+
+### EXPLORATORY signals:
+- Questions: "what if...", "I wonder...", "I'm curious about..."
+- Open-ended: "tell me about...", "explore...", "help me understand..."
+→ intent_mode: "exploratory", response_style: "conversational"
+→ Generate 1-3 suggested_followups
+
+### ACTION signals:
+- Imperatives: "find all...", "list...", "generate...", "summarize..."
+- Specificity: "the top 10...", "exact numbers for..."
+→ intent_mode: "action", response_style: "structured"
 → suggested_followups: null
-→ Agent should: execute efficiently, return well-formatted results
-
-### MIXED signals (needs both or unclear):
-- "tell me about X" (could be either)
-- "what's in the data?" (exploratory about structure, or action to show it?)
-- Brief queries that could go either way
-→ intent_mode: "mixed"
-→ response_style: "structured"
-→ suggested_followups: include 1-2 to offer directions
 
 ## EXAMPLES:
 
-User: "I'm curious about the sales trends in my data"
-→ category: "doc_search", intent_mode: "exploratory", response_style: "conversational"
-→ suggested_followups: ["Would you like to see trends by region?", "Should I compare to previous periods?"]
-
-User: "Generate a summary report of Q4 sales by region"
-→ category: "analysis", intent_mode: "action", response_style: "report"
-→ suggested_followups: null
-
 User: "What files do I have?"
-→ category: "resource_query", intent_mode: "action", response_style: "structured"
-→ suggested_followups: null
+→ {{"category": "resource_query", "acknowledgment": "Let's see what files we have", "intent_mode": "action", "matched_resource": null}}
 
-User: "Help me understand the authentication flow in this codebase"
-→ category: "doc_search", intent_mode: "exploratory", response_style: "conversational"
-→ suggested_followups: ["Want me to trace a specific user journey?", "Should I look at the security aspects?"]
+User: "Tell me about the sensor image" (after discussing sensor.png)
+→ {{"category": "image_query", "acknowledgment": "Let's take a closer look at that image", "intent_mode": "exploratory", "matched_resource": "sensor.png", "is_followup": true}}
 
-User: "Find all API endpoints"
-→ category: "doc_search", intent_mode: "action", response_style: "structured"
-→ suggested_followups: null
+User: "Tell me more about it" (after analyzing an image)
+→ {{"category": "image_query", "acknowledgment": "Let's dig deeper into what we see", "intent_mode": "exploratory", "is_followup": true}}
+
+User: "Analyze the Q4 sales in my spreadsheet"
+→ {{"category": "data_query", "acknowledgment": "Let's dig into the Q4 sales data", "intent_mode": "action", "matched_resource": "sales.xlsx"}}
+
+User: "Find pricing information in my documents"
+→ {{"category": "doc_search", "acknowledgment": "Let's search the documents for pricing info", "intent_mode": "action"}}
+
+User: "What's the weather in Tokyo?" (no relevant resources)
+→ {{"category": "web_search", "acknowledgment": "Let's look that up", "intent_mode": "action"}}
 
 ## CONTEXT:
 - has_documents: {has_documents}
@@ -972,7 +1004,8 @@ def build_router_prompt_v3(
     has_history: bool = False,
     turn_count: int = 0,
     python_matched_resource: str = None,
-    python_match_confidence: float = 0.0
+    python_match_confidence: float = 0.0,
+    conversation_history: list[dict] = None
 ) -> str:
     """Build the V3 router system prompt with intent detection."""
     resource_text = "None"
@@ -990,6 +1023,23 @@ def build_router_prompt_v3(
                     resource_parts.append(f"- {r.name} ({r.type})")
             resource_text = "\n".join(resource_parts)
 
+    # Format recent conversation history for context
+    conversation_context = ""
+    if conversation_history and len(conversation_history) > 0:
+        # Include last few exchanges (up to 3 user-assistant pairs = 6 messages)
+        recent = conversation_history[-6:]
+        context_parts = ["## RECENT CONVERSATION (use this to understand follow-ups):"]
+        for msg in recent:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            # Truncate long messages
+            if len(content) > 300:
+                content = content[:300] + "..."
+            context_parts.append(f"{role.upper()}: {content}")
+        conversation_context = "\n".join(context_parts)
+    else:
+        conversation_context = "## RECENT CONVERSATION: None (this is the first message)"
+
     return ROUTER_SYSTEM_PROMPT_V3.format(
         resources=resource_text,
         has_documents=has_documents,
@@ -998,7 +1048,8 @@ def build_router_prompt_v3(
         has_history=has_history,
         turn_count=turn_count,
         python_matched_resource=python_matched_resource or "null",
-        python_match_confidence=python_match_confidence
+        python_match_confidence=python_match_confidence,
+        conversation_context=conversation_context
     )
 
 
@@ -1245,7 +1296,7 @@ class Agent:
         has_documents: bool = True,
         has_web_search: bool = False,
         resources: list[ResourceInfo] = None,
-        router_model: str = "claude-3-haiku-20240307"
+        router_model: str = "claude-3-5-haiku-latest"
     ) -> RequestPlan:
         """V1: Use a fast model to plan how to handle the request.
 
@@ -1301,13 +1352,13 @@ class Agent:
             msg_lower = message.lower()
             # Extract a simple topic-based acknowledgment
             if "invoice" in msg_lower:
-                fallback_ack = "Searching for invoice information..."
+                fallback_ack = "Let's find that invoice info..."
             elif "find" in msg_lower or "search" in msg_lower:
-                fallback_ack = f"Searching your documents..."
+                fallback_ack = "Let's search the documents..."
             elif "what" in msg_lower or "how" in msg_lower or "?" in message:
-                fallback_ack = "Looking that up..."
+                fallback_ack = "Let's look that up..."
             else:
-                fallback_ack = "Searching your workspace..."
+                fallback_ack = "Let's check the workspace..."
             return RequestPlan(
                 category="chat",
                 acknowledgment=fallback_ack,
@@ -1324,7 +1375,7 @@ class Agent:
         has_web_search: bool = False,
         resources: list[ResourceInfo] = None,
         conversation_history: list[dict] = None,
-        router_model: str = "claude-3-haiku-20240307"
+        router_model: str = "claude-3-5-haiku-latest"
     ) -> RequestPlanV2:
         """V2: Enhanced request planning with context-awareness.
 
@@ -1451,19 +1502,19 @@ class Agent:
                         search_strategy="none",
                         complexity="instant",
                         needs_tools=False,
-                        direct_response="Hi! How can I help you today?" if "hi" in msg_lower or "hello" in msg_lower or "hey" in msg_lower else "You're welcome!",
+                        direct_response="Hi! What are we diving into today?" if "hi" in msg_lower or "hello" in msg_lower or "hey" in msg_lower else "Happy to help!",
                         is_followup=False
                     )
 
             # Fallback to doc_search with contextual acknowledgment
             if "invoice" in msg_lower:
-                fallback_ack = "Searching for invoice information..."
+                fallback_ack = "Let's find that invoice info..."
             elif "find" in msg_lower or "search" in msg_lower:
-                fallback_ack = "Searching your documents..."
+                fallback_ack = "Let's search the documents..."
             elif "what" in msg_lower or "how" in msg_lower or "?" in message:
-                fallback_ack = "Looking that up..."
+                fallback_ack = "Let's look that up..."
             else:
-                fallback_ack = "Searching your workspace..."
+                fallback_ack = "Let's check the workspace..."
 
             return RequestPlanV2(
                 category="doc_search" if has_documents else "chat",
@@ -1486,7 +1537,7 @@ class Agent:
         has_web_search: bool = False,
         resources: list[ResourceInfo] = None,
         conversation_history: list[dict] = None,
-        router_model: str = "claude-3-haiku-20240307"
+        router_model: str = "claude-3-5-haiku-latest"
     ) -> RequestPlanV3:
         """V3: Intent-aware request planning.
 
@@ -1511,7 +1562,7 @@ class Agent:
             python_matched_resource, python_matched_id, python_match_confidence = \
                 match_query_to_resource(message, resources)
 
-        # Build V3 router prompt with intent detection
+        # Build V3 router prompt with intent detection and conversation context
         router_prompt = build_router_prompt_v3(
             has_documents=has_documents,
             has_web_search=has_web_search,
@@ -1519,13 +1570,14 @@ class Agent:
             has_history=has_history,
             turn_count=turn_count,
             python_matched_resource=python_matched_resource,
-            python_match_confidence=python_match_confidence
+            python_match_confidence=python_match_confidence,
+            conversation_history=conversation_history
         )
 
         try:
             response = self.client.messages.create(
                 model=router_model,
-                max_tokens=768,  # Larger for suggested_followups
+                max_tokens=512,  # Enough for JSON + suggested_followups
                 system=router_prompt,
                 messages=[{"role": "user", "content": message}]
             )
@@ -1625,7 +1677,7 @@ class Agent:
                 if re.search(pattern, msg_lower):
                     return RequestPlanV3(
                         category="resource_query",
-                        acknowledgment="Listing your workspace resources...",
+                        acknowledgment="Let's see what we have in the workspace...",
                         thinking_budget=0,
                         search_strategy="none",
                         complexity="simple",
@@ -1646,7 +1698,7 @@ class Agent:
                         search_strategy="none",
                         complexity="instant",
                         needs_tools=False,
-                        direct_response="Hi! How can I help you today?" if "hi" in msg_lower or "hello" in msg_lower or "hey" in msg_lower else "You're welcome!",
+                        direct_response="Hi! What are we diving into today?" if "hi" in msg_lower or "hello" in msg_lower or "hey" in msg_lower else "Happy to help!",
                         is_followup=False,
                         intent_mode="action",
                         intent_confidence=0.9,
@@ -1663,13 +1715,13 @@ class Agent:
 
             # Fallback to doc_search with contextual acknowledgment
             if "invoice" in msg_lower:
-                fallback_ack = "Searching for invoice information..."
+                fallback_ack = "Let's find that invoice info..."
             elif "find" in msg_lower or "search" in msg_lower:
-                fallback_ack = "Searching your documents..."
+                fallback_ack = "Let's search the documents..."
             elif "what" in msg_lower or "how" in msg_lower or "?" in message:
-                fallback_ack = "Looking that up..."
+                fallback_ack = "Let's look that up..."
             else:
-                fallback_ack = "Searching your workspace..."
+                fallback_ack = "Let's check the workspace..."
 
             return RequestPlanV3(
                 category="doc_search" if has_documents else "chat",
@@ -1695,7 +1747,7 @@ class Agent:
         has_web_search: bool = False,
         resources: list[ResourceInfo] = None,
         conversation_history: list[dict] = None,
-        router_model: str = "claude-3-haiku-20240307"
+        router_model: str = "claude-3-5-haiku-latest"
     ) -> RequestPlan | RequestPlanV2 | RequestPlanV3:
         """Route to V1, V2, or V3 based on agent version.
 
@@ -1828,9 +1880,12 @@ class Agent:
         enable_thinking: bool = True,
         system_instructions: str = None,
         context_only: bool = False,
+        tool_context: ToolContext = None,
+        # Deprecated parameters (kept for backwards compatibility during transition)
         save_finding_callback: Callable[[str, str | None], dict] = None,
         has_data_files: bool = False,
         has_images: bool = False,
+        fetch_resources_callback: Callable[[], list[ResourceInfo]] = None,
     ) -> Iterator[AgentEvent]:
         """Stream a conversation turn with events for UI updates.
 
@@ -1838,18 +1893,40 @@ class Agent:
         When context_only=True, only uses document search (no web, no training data).
 
         Args:
-            save_finding_callback: Optional callback to save findings. Takes (content, note) and returns finding dict.
+            tool_context: ToolContext with database session, project info, and API clients.
+                          Required for tool execution. If not provided, tools won't work.
         """
         messages = list(conversation_history or [])
         messages.append({"role": "user", "content": message})
 
         all_sources = []
 
-        # Build tools based on what's available
-        # In context_only mode, disable web search
-        has_web_search = bool(self.tavily_api_key) and not context_only
-        can_save_findings = save_finding_callback is not None
-        tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images, version=self.version)
+        # Build tools using the new registry system
+        # In context_only mode, disable web search by not providing tavily_api_key
+        if tool_context:
+            # Determine web search availability for router
+            has_web_search = bool(tool_context.tavily_api_key) and not context_only
+
+            # Temporarily remove tavily key in context_only mode
+            if context_only and tool_context.tavily_api_key:
+                original_tavily_key = tool_context.tavily_api_key
+                tool_context.tavily_api_key = None
+            else:
+                original_tavily_key = None
+
+            registry = get_registry()
+            tools = registry.get_schemas(tool_context)
+            executor = ToolExecutor(registry, tool_context)
+
+            # Restore tavily key if we removed it
+            if original_tavily_key:
+                tool_context.tavily_api_key = original_tavily_key
+        else:
+            # Fallback to old behavior if no tool_context provided
+            has_web_search = bool(self.tavily_api_key) and not context_only
+            can_save_findings = save_finding_callback is not None
+            tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images, version=self.version)
+            executor = None
 
         # Step 1: Plan the request using the router
         plan = self.plan_request(
@@ -2116,7 +2193,31 @@ class Agent:
                     if block.type == "thinking":
                         thinking_blocks.append(block)
                     elif block.type == "tool_use":
-                        if block.name == "search_documents":
+                        # Use new ToolExecutor if available
+                        if executor:
+                            result_content, events, metadata = executor.execute(
+                                block.name,
+                                block.id,
+                                block.input
+                            )
+
+                            # Emit events
+                            for event in events:
+                                yield AgentEvent(event.type, event.data)
+
+                            # Handle sources from document search
+                            if block.name == "search_documents" and "sources" in metadata:
+                                all_sources.extend(metadata["sources"])
+
+                            # Append tool result
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_content
+                            })
+
+                        # Legacy fallback (when no tool_context provided)
+                        elif block.name == "search_documents":
                             query = block.input.get("query", message)
 
                             # Emit tool call event
@@ -2415,8 +2516,9 @@ class Agent:
                                 "query": f"type={type_filter or 'all'}, status={status_filter or 'all'}"
                             })
 
-                            # Build resource list
-                            filtered_resources = resources or []
+                            # Fetch fresh resources if callback provided, otherwise use passed-in list
+                            current_resources = fetch_resources_callback() if fetch_resources_callback else (resources or [])
+                            filtered_resources = current_resources
                             if type_filter:
                                 filtered_resources = [r for r in filtered_resources if r.type == type_filter]
                             if status_filter:
@@ -2667,12 +2769,18 @@ class Agent:
 
                 # Emit sources (only for document search)
                 if all_sources:
-                    yield AgentEvent("sources", {
-                        "sources": [
+                    # Check if sources are already formatted (from new executor)
+                    # or need formatting (from legacy code)
+                    if all_sources and isinstance(all_sources[0], dict):
+                        # Already formatted by tool
+                        formatted_sources = all_sources
+                    else:
+                        # Legacy: format RetrievalResult objects
+                        formatted_sources = [
                             self._format_source_info(r)
                             for r in all_sources
                         ]
-                    })
+                    yield AgentEvent("sources", {"sources": formatted_sources})
 
                 # Add to messages and continue loop
                 # Must preserve thinking blocks when passing back for tool results

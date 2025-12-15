@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { UserAvatar } from "@/components/user-avatar";
 import {
   Table,
@@ -481,7 +480,6 @@ export default function LibraryPage() {
                 className="h-9 w-full sm:w-64 rounded-md border border-input bg-background pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
               />
             </div>
-            <ThemeToggle />
             <UserAvatar />
           </div>
         </div>
