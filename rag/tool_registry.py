@@ -67,6 +67,31 @@ TOOL_REGISTRY: dict[str, ToolDisplayConfig] = {
         complete_template="Finding saved successfully",
         failed_template="Failed to save finding"
     ),
+    # V3 Tools - Resource Awareness
+    "list_resources": ToolDisplayConfig(
+        id="list_resources",
+        display_name="List Resources",
+        icon="📋",
+        in_progress_template="Listing workspace resources...",
+        complete_template="Found {count} resource(s)",
+        failed_template="No resources found"
+    ),
+    "get_resource_info": ToolDisplayConfig(
+        id="get_resource_info",
+        display_name="Get Resource Info",
+        icon="ℹ️",
+        in_progress_template="Getting info for '{query}'",
+        complete_template="Retrieved info for '{query}'",
+        failed_template="Resource '{query}' not found"
+    ),
+    "read_resource": ToolDisplayConfig(
+        id="read_resource",
+        display_name="Read Resource",
+        icon="👁️",
+        in_progress_template="Reading '{query}'",
+        complete_template="Read '{query}' content",
+        failed_template="Failed to read '{query}'"
+    ),
 }
 
 

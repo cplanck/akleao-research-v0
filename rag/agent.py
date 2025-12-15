@@ -60,6 +60,26 @@ class RequestPlanV2(RequestPlan):
     is_followup: bool = False  # True if this references prior conversation
 
 
+@dataclass
+class RequestPlanV3(RequestPlanV2):
+    """V3 plan with intent detection for exploratory vs action-oriented requests.
+
+    Builds on V2 with:
+    - Intent mode detection (exploratory, action, mixed)
+    - Response style guidance (conversational, structured, report)
+    - Proactive resource awareness
+    """
+    # Intent detection
+    intent_mode: str = "action"  # "exploratory", "action", "mixed"
+    intent_confidence: float = 0.5  # 0.0-1.0 confidence in intent classification
+
+    # Response style guidance
+    response_style: str = "structured"  # "conversational", "structured", "report"
+
+    # Proactive suggestions (for exploratory mode)
+    suggested_followups: list[str] | None = None  # Questions/directions to explore
+
+
 # Patterns for simple queries that don't need thinking
 SIMPLE_QUERY_PATTERNS = [
     # Greetings
@@ -254,6 +274,93 @@ You MUST specify which image resource to view by filename.""",
     }
 }
 
+# ============================================================================
+# V3 Tools - Project/Resource Awareness
+# ============================================================================
+
+LIST_RESOURCES_TOOL = {
+    "name": "list_resources",
+    "description": """List all resources in the current workspace.
+
+Use this tool when:
+- User asks "what files do I have?", "what's in my workspace?", "show my documents"
+- You need to know what resources are available before searching or analyzing
+- User references "the document" or "my files" without being specific
+- You want to help the user understand what they can work with
+
+Returns a list of all resources with their type, status, and summary.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "type_filter": {
+                "type": "string",
+                "description": "Optional: filter by resource type ('document', 'data_file', 'image', 'website', 'git_repository')",
+                "enum": ["document", "data_file", "image", "website", "git_repository"]
+            },
+            "status_filter": {
+                "type": "string",
+                "description": "Optional: filter by status ('ready', 'pending', 'indexing', 'failed')",
+                "enum": ["ready", "pending", "indexing", "failed"]
+            }
+        },
+        "required": []
+    }
+}
+
+GET_RESOURCE_INFO_TOOL = {
+    "name": "get_resource_info",
+    "description": """Get detailed information about a specific resource.
+
+Use this tool when:
+- User asks about a specific file ("tell me about sales.csv", "what's in the report?")
+- You need metadata before analyzing (columns in a CSV, dimensions of an image)
+- You want to understand a resource's content without searching
+
+Returns detailed info: type, status, summary, and type-specific metadata (columns for data files, dimensions for images, etc.).""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "resource_name": {
+                "type": "string",
+                "description": "The name of the resource to get info about"
+            }
+        },
+        "required": ["resource_name"]
+    }
+}
+
+READ_RESOURCE_TOOL = {
+    "name": "read_resource",
+    "description": """Read the content or preview of a resource directly.
+
+Use this tool when:
+- User wants to see the actual content ("show me what's in the file")
+- You need to preview data before running analysis
+- search_documents isn't finding relevant content but you know the resource exists
+- User asks "what does the beginning of X say?"
+
+For documents: returns first N characters of text content
+For data files: returns schema + sample rows
+For images: returns the image for vision analysis (use view_image instead for questions)
+
+This is a direct read - no semantic search involved.""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "resource_name": {
+                "type": "string",
+                "description": "The name of the resource to read"
+            },
+            "preview_lines": {
+                "type": "integer",
+                "description": "Number of lines/rows to preview (default: 50, max: 200)",
+                "default": 50
+            }
+        },
+        "required": ["resource_name"]
+    }
+}
+
 BASE_SYSTEM_PROMPT = """You are a helpful assistant.
 
 Be extremely concise. Respond like a human would in a chat - short, direct, no fluff.
@@ -390,8 +497,9 @@ def build_tools(
     can_save_findings: bool = False,
     has_data_files: bool = False,
     has_images: bool = False,
+    version: str = "v2",
 ) -> list:
-    """Build tool list based on available resources."""
+    """Build tool list based on available resources and agent version."""
     tools = []
     if has_documents:
         tools.append(DOCUMENT_SEARCH_TOOL)
@@ -403,11 +511,18 @@ def build_tools(
         tools.append(ANALYZE_DATA_TOOL)
     if has_images:
         tools.append(VIEW_IMAGE_TOOL)
+
+    # V3 adds resource awareness tools (always available)
+    if version == "v3":
+        tools.append(LIST_RESOURCES_TOOL)
+        tools.append(GET_RESOURCE_INFO_TOOL)
+        tools.append(READ_RESOURCE_TOOL)
+
     return tools
 
 
 # Default agent version (can be overridden via env var or parameter)
-AGENT_VERSION = os.getenv("AGENT_VERSION", "v2")  # "v1" or "v2"
+AGENT_VERSION = os.getenv("AGENT_VERSION", "v3")  # "v1", "v2", or "v3"
 
 
 # Router prompt for planning requests (V1 - original)
@@ -637,6 +752,140 @@ def build_router_prompt_v2(
             resource_text = "\n".join(resource_parts)
 
     return ROUTER_SYSTEM_PROMPT_V2.format(
+        resources=resource_text,
+        has_documents=has_documents,
+        has_web_search=has_web_search,
+        resource_count=resource_count,
+        has_history=has_history,
+        turn_count=turn_count,
+        python_matched_resource=python_matched_resource or "null",
+        python_match_confidence=python_match_confidence
+    )
+
+
+# ============================================================================
+# V3 Router System Prompt (Intent-Aware)
+# ============================================================================
+
+ROUTER_SYSTEM_PROMPT_V3 = """You are a request router with intent detection. Analyze the user's message to determine both WHAT they want and HOW they're approaching it.
+
+You must respond with a JSON object (no other text) with these fields:
+
+## Required fields (from V2):
+- category: one of "social", "factual", "clarification", "doc_search", "web_search", "research", "analysis", "conversation", "resource_query"
+- acknowledgment: Brief sentence describing what you're about to do (empty for social/factual/clarification)
+- complexity: one of "instant", "simple", "moderate", "complex"
+- search_strategy: one of "none", "docs", "web", "both"
+- matched_resource: resource name if query clearly targets one specific resource, else null
+- resource_confidence: 0.0-1.0 confidence in resource match
+- direct_response: for social/clarification only - the actual response text
+- is_followup: true if this references prior conversation
+
+## New V3 fields:
+- intent_mode: one of "exploratory", "action", "mixed"
+- intent_confidence: 0.0-1.0 confidence in intent classification
+- response_style: one of "conversational", "structured", "report"
+- suggested_followups: array of 1-3 follow-up questions (for exploratory mode only, else null)
+
+## NEW CATEGORY: "resource_query"
+Use this when user asks about their workspace/files without a specific search:
+- "what files do I have?", "show my documents", "what's in my workspace?"
+- "tell me about my resources", "list my uploads"
+→ This triggers list_resources tool, NOT search_documents
+
+## INTENT DETECTION (Critical for V3):
+
+### EXPLORATORY signals (user is learning/exploring):
+- Questions: "what if...", "I wonder...", "I'm curious about...", "help me understand..."
+- Open-ended: "tell me about...", "what can you tell me about...", "explore..."
+- Brainstorming: "ideas for...", "possibilities", "options", "what are some ways..."
+- Learning: "explain...", "how does X work?", "walk me through..."
+→ intent_mode: "exploratory"
+→ response_style: "conversational"
+→ Generate 1-3 suggested_followups to guide exploration
+→ Agent should: offer multiple angles, be thorough but invite follow-up
+
+### ACTION signals (user wants specific output):
+- Imperatives: "find all...", "list...", "create...", "generate...", "summarize..."
+- Deliverables: "report on...", "comparison of...", "analysis of..."
+- Specificity: "the top 10...", "all X between...", "exact numbers for..."
+- Commands: "do X", "run X", "calculate X"
+→ intent_mode: "action"
+→ response_style: "structured" (or "report" for multi-part outputs)
+→ suggested_followups: null
+→ Agent should: execute efficiently, return well-formatted results
+
+### MIXED signals (needs both or unclear):
+- "tell me about X" (could be either)
+- "what's in the data?" (exploratory about structure, or action to show it?)
+- Brief queries that could go either way
+→ intent_mode: "mixed"
+→ response_style: "structured"
+→ suggested_followups: include 1-2 to offer directions
+
+## EXAMPLES:
+
+User: "I'm curious about the sales trends in my data"
+→ category: "doc_search", intent_mode: "exploratory", response_style: "conversational"
+→ suggested_followups: ["Would you like to see trends by region?", "Should I compare to previous periods?"]
+
+User: "Generate a summary report of Q4 sales by region"
+→ category: "analysis", intent_mode: "action", response_style: "report"
+→ suggested_followups: null
+
+User: "What files do I have?"
+→ category: "resource_query", intent_mode: "action", response_style: "structured"
+→ suggested_followups: null
+
+User: "Help me understand the authentication flow in this codebase"
+→ category: "doc_search", intent_mode: "exploratory", response_style: "conversational"
+→ suggested_followups: ["Want me to trace a specific user journey?", "Should I look at the security aspects?"]
+
+User: "Find all API endpoints"
+→ category: "doc_search", intent_mode: "action", response_style: "structured"
+→ suggested_followups: null
+
+## CONTEXT:
+- has_documents: {has_documents}
+- has_web_search: {has_web_search}
+- resource_count: {resource_count}
+- has_conversation_history: {has_history}
+- conversation_turn_count: {turn_count}
+- python_matched_resource: {python_matched_resource}
+- python_match_confidence: {python_match_confidence}
+
+RESOURCES (names and summaries):
+{resources}
+
+Respond with JSON only."""
+
+
+def build_router_prompt_v3(
+    has_documents: bool,
+    has_web_search: bool,
+    resources: list[ResourceInfo] = None,
+    has_history: bool = False,
+    turn_count: int = 0,
+    python_matched_resource: str = None,
+    python_match_confidence: float = 0.0
+) -> str:
+    """Build the V3 router system prompt with intent detection."""
+    resource_text = "None"
+    resource_count = 0
+
+    if resources:
+        ready = [r for r in resources if r.status == "ready"]
+        resource_count = len(ready)
+        if ready:
+            resource_parts = []
+            for r in ready:
+                if r.summary:
+                    resource_parts.append(f"- {r.name} ({r.type}): {r.summary}")
+                else:
+                    resource_parts.append(f"- {r.name} ({r.type})")
+            resource_text = "\n".join(resource_parts)
+
+    return ROUTER_SYSTEM_PROMPT_V3.format(
         resources=resource_text,
         has_documents=has_documents,
         has_web_search=has_web_search,
@@ -1125,6 +1374,215 @@ class Agent:
                 is_followup=has_history
             )
 
+    def _plan_request_v3(
+        self,
+        message: str,
+        has_documents: bool = True,
+        has_web_search: bool = False,
+        resources: list[ResourceInfo] = None,
+        conversation_history: list[dict] = None,
+        router_model: str = "claude-3-haiku-20240307"
+    ) -> RequestPlanV3:
+        """V3: Intent-aware request planning.
+
+        Features (in addition to V2):
+        - Intent detection: exploratory vs action-oriented
+        - Response style guidance
+        - Suggested follow-ups for exploratory queries
+        - New category: resource_query (for workspace introspection)
+
+        Returns RequestPlanV3 with intent detection fields.
+        """
+        # Determine conversation context
+        has_history = bool(conversation_history and len(conversation_history) > 0)
+        turn_count = len(conversation_history) // 2 if conversation_history else 0
+
+        # Python-first resource matching (inherited from V2)
+        python_matched_resource = None
+        python_matched_id = None
+        python_match_confidence = 0.0
+
+        if resources:
+            python_matched_resource, python_matched_id, python_match_confidence = \
+                match_query_to_resource(message, resources)
+
+        # Build V3 router prompt with intent detection
+        router_prompt = build_router_prompt_v3(
+            has_documents=has_documents,
+            has_web_search=has_web_search,
+            resources=resources,
+            has_history=has_history,
+            turn_count=turn_count,
+            python_matched_resource=python_matched_resource,
+            python_match_confidence=python_match_confidence
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=router_model,
+                max_tokens=768,  # Larger for suggested_followups
+                system=router_prompt,
+                messages=[{"role": "user", "content": message}]
+            )
+
+            # Parse the JSON response
+            response_text = response.content[0].text.strip()
+            # Handle potential markdown code blocks
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+
+            plan_data = json.loads(response_text)
+
+            # Extract category and complexity
+            category = plan_data.get("category", "doc_search")
+            complexity = plan_data.get("complexity", "moderate")
+
+            # Determine thinking budget based on complexity and intent
+            intent_mode = plan_data.get("intent_mode", "action")
+            if complexity == "instant":
+                thinking_budget = 0
+            elif complexity == "simple":
+                thinking_budget = 0
+            elif complexity == "complex":
+                thinking_budget = self.thinking_budget * 2
+            elif intent_mode == "exploratory":
+                # Exploratory queries benefit from more thinking
+                thinking_budget = int(self.thinking_budget * 1.5)
+            else:
+                thinking_budget = self.thinking_budget
+
+            # Determine if tools are needed
+            search_strategy = plan_data.get("search_strategy", "none")
+            needs_tools = search_strategy != "none" or category == "resource_query"
+
+            # Extract V2 fields
+            matched_resource = plan_data.get("matched_resource")
+            resource_confidence = plan_data.get("resource_confidence", 0.0)
+            direct_response = plan_data.get("direct_response")
+            is_followup = plan_data.get("is_followup", False)
+
+            # Use Python-matched resource if LLM didn't find one and we have high confidence
+            if not matched_resource and python_matched_resource and python_match_confidence >= 0.7:
+                matched_resource = python_matched_resource
+                resource_confidence = python_match_confidence
+
+            # Get matched resource ID
+            matched_resource_id = None
+            if matched_resource and resources:
+                for r in resources:
+                    if r.name == matched_resource:
+                        matched_resource_id = r.id
+                        break
+            if not matched_resource_id and python_matched_id:
+                matched_resource_id = python_matched_id
+
+            # Extract V3-specific fields
+            intent_confidence = plan_data.get("intent_confidence", 0.5)
+            response_style = plan_data.get("response_style", "structured")
+            suggested_followups = plan_data.get("suggested_followups")
+
+            return RequestPlanV3(
+                category=category,
+                acknowledgment=plan_data.get("acknowledgment", ""),
+                thinking_budget=thinking_budget,
+                search_strategy=search_strategy,
+                complexity=complexity,
+                needs_tools=needs_tools,
+                matched_resource=matched_resource,
+                matched_resource_id=matched_resource_id,
+                resource_confidence=resource_confidence,
+                direct_response=direct_response,
+                is_followup=is_followup,
+                intent_mode=intent_mode,
+                intent_confidence=intent_confidence,
+                response_style=response_style,
+                suggested_followups=suggested_followups
+            )
+
+        except Exception as e:
+            # Fallback plan if API call or parsing fails
+            print(f"[Router V3] Error: {e}")
+
+            # Use V2-style fallback with V3 defaults
+            msg_lower = message.lower()
+
+            # Check for resource query patterns
+            resource_query_patterns = [
+                r"what (files|documents|resources)",
+                r"show (my |me )?(files|documents|uploads)",
+                r"list (my )?(files|documents|resources)",
+                r"what('s| is) in my (workspace|project)",
+            ]
+            for pattern in resource_query_patterns:
+                if re.search(pattern, msg_lower):
+                    return RequestPlanV3(
+                        category="resource_query",
+                        acknowledgment="Listing your workspace resources...",
+                        thinking_budget=0,
+                        search_strategy="none",
+                        complexity="simple",
+                        needs_tools=True,
+                        intent_mode="action",
+                        intent_confidence=0.9,
+                        response_style="structured"
+                    )
+
+            # Check for social patterns
+            social_patterns = ["^hi$", "^hello$", "^hey$", "^thanks", "^thank you", "^bye$", "^goodbye$"]
+            for pattern in social_patterns:
+                if re.match(pattern, msg_lower.strip()):
+                    return RequestPlanV3(
+                        category="social",
+                        acknowledgment="",
+                        thinking_budget=0,
+                        search_strategy="none",
+                        complexity="instant",
+                        needs_tools=False,
+                        direct_response="Hi! How can I help you today?" if "hi" in msg_lower or "hello" in msg_lower or "hey" in msg_lower else "You're welcome!",
+                        is_followup=False,
+                        intent_mode="action",
+                        intent_confidence=0.9,
+                        response_style="conversational"
+                    )
+
+            # Detect exploratory vs action from patterns
+            exploratory_patterns = [
+                r"curious", r"wonder", r"explore", r"understand",
+                r"help me", r"walk me through", r"explain",
+                r"what can you tell", r"what do you think"
+            ]
+            is_exploratory = any(re.search(p, msg_lower) for p in exploratory_patterns)
+
+            # Fallback to doc_search with contextual acknowledgment
+            if "invoice" in msg_lower:
+                fallback_ack = "Searching for invoice information..."
+            elif "find" in msg_lower or "search" in msg_lower:
+                fallback_ack = "Searching your documents..."
+            elif "what" in msg_lower or "how" in msg_lower or "?" in message:
+                fallback_ack = "Looking that up..."
+            else:
+                fallback_ack = "Searching your workspace..."
+
+            return RequestPlanV3(
+                category="doc_search" if has_documents else "chat",
+                acknowledgment=fallback_ack,
+                thinking_budget=self.thinking_budget,
+                search_strategy="docs" if has_documents else "none",
+                complexity="moderate",
+                needs_tools=has_documents,
+                matched_resource=python_matched_resource,
+                matched_resource_id=python_matched_id,
+                resource_confidence=python_match_confidence,
+                direct_response=None,
+                is_followup=has_history,
+                intent_mode="exploratory" if is_exploratory else "action",
+                intent_confidence=0.5,
+                response_style="conversational" if is_exploratory else "structured"
+            )
+
     def plan_request(
         self,
         message: str,
@@ -1133,12 +1591,21 @@ class Agent:
         resources: list[ResourceInfo] = None,
         conversation_history: list[dict] = None,
         router_model: str = "claude-3-haiku-20240307"
-    ) -> RequestPlan | RequestPlanV2:
-        """Route to V1 or V2 based on agent version.
+    ) -> RequestPlan | RequestPlanV2 | RequestPlanV3:
+        """Route to V1, V2, or V3 based on agent version.
 
-        Returns RequestPlan (V1) or RequestPlanV2 (V2) based on self.version.
+        Returns RequestPlan (V1), RequestPlanV2 (V2), or RequestPlanV3 (V3) based on self.version.
         """
-        if self.version == "v2":
+        if self.version == "v3":
+            return self._plan_request_v3(
+                message=message,
+                has_documents=has_documents,
+                has_web_search=has_web_search,
+                resources=resources,
+                conversation_history=conversation_history,
+                router_model=router_model
+            )
+        elif self.version == "v2":
             return self._plan_request_v2(
                 message=message,
                 has_documents=has_documents,
@@ -1268,7 +1735,7 @@ class Agent:
         # In context_only mode, disable web search
         has_web_search = bool(self.tavily_api_key) and not context_only
         can_save_findings = save_finding_callback is not None
-        tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images)
+        tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images, version=self.version)
         system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions, context_only, has_data_files, has_images)
 
         # Step 1: Plan the request using the router
@@ -1279,22 +1746,86 @@ class Agent:
             resources=resources,
             conversation_history=conversation_history
         )
-        print(f"[Router] Plan: category={plan.category}, acknowledgment='{plan.acknowledgment}', complexity={plan.complexity}")
 
-        # Emit the plan event with acknowledgment (include V2 fields if available)
+        # Log with version-specific info
+        if isinstance(plan, RequestPlanV3):
+            print(f"[Router V3] Plan: category={plan.category}, intent={plan.intent_mode}, style={plan.response_style}, ack='{plan.acknowledgment}'")
+        else:
+            print(f"[Router] Plan: category={plan.category}, acknowledgment='{plan.acknowledgment}', complexity={plan.complexity}")
+
+        # Emit the plan event with acknowledgment (include V2/V3 fields if available)
         plan_event_data = {
             "category": plan.category,
             "acknowledgment": plan.acknowledgment,
             "complexity": plan.complexity,
             "search_strategy": plan.search_strategy
         }
-        # Add V2 fields if present
+        # Add V2 fields if present (V3 inherits from V2)
         if isinstance(plan, RequestPlanV2):
             plan_event_data["matched_resource"] = plan.matched_resource
             plan_event_data["resource_confidence"] = plan.resource_confidence
             plan_event_data["is_followup"] = plan.is_followup
 
+        # Add V3 fields if present
+        if isinstance(plan, RequestPlanV3):
+            plan_event_data["intent_mode"] = plan.intent_mode
+            plan_event_data["intent_confidence"] = plan.intent_confidence
+            plan_event_data["response_style"] = plan.response_style
+            plan_event_data["suggested_followups"] = plan.suggested_followups
+
         yield AgentEvent("plan", plan_event_data)
+
+        # =====================================================================
+        # V3 FAST PATHS: Handle instant responses and resource queries
+        # =====================================================================
+        if self.version == "v3" and isinstance(plan, RequestPlanV3):
+            has_history = bool(conversation_history and len(conversation_history) > 0)
+
+            # Fast path 1: SOCIAL (greetings, thanks)
+            if plan.category == "social" and plan.direct_response and not has_history:
+                print(f"[V3 Fast Path] Social response: {plan.direct_response}")
+                yield AgentEvent("chunk", {"content": plan.direct_response})
+                yield AgentEvent("sources", {"sources": []})
+                yield AgentEvent("usage", {"input_tokens": 0, "output_tokens": 0})
+                yield AgentEvent("done", {})
+                return
+
+            # Fast path 2: CLARIFICATION
+            if plan.category == "clarification" and plan.direct_response and not has_history:
+                print(f"[V3 Fast Path] Clarification: {plan.direct_response}")
+                yield AgentEvent("chunk", {"content": plan.direct_response})
+                yield AgentEvent("sources", {"sources": []})
+                yield AgentEvent("usage", {"input_tokens": 0, "output_tokens": 0})
+                yield AgentEvent("done", {})
+                return
+
+            # Fast path 3: FACTUAL - Call Sonnet directly, no tools
+            if plan.category == "factual":
+                print(f"[V3 Fast Path] Factual query - using Sonnet without tools/thinking")
+                yield AgentEvent("status", {"status": "thinking"})
+
+                try:
+                    with self.client.messages.stream(
+                        model=self.model,
+                        max_tokens=self.max_tokens,
+                        system="You are a helpful assistant. Answer the user's question directly and concisely.",
+                        messages=messages
+                    ) as stream:
+                        for event in stream:
+                            if event.type == "content_block_delta":
+                                if hasattr(event.delta, "text"):
+                                    yield AgentEvent("chunk", {"content": event.delta.text})
+
+                        final_message = stream.get_final_message()
+                        yield AgentEvent("sources", {"sources": []})
+                        yield AgentEvent("usage", {
+                            "input_tokens": final_message.usage.input_tokens,
+                            "output_tokens": final_message.usage.output_tokens
+                        })
+                        yield AgentEvent("done", {})
+                        return
+                except Exception as e:
+                    print(f"[V3 Fast Path] Factual error: {e}, falling back to normal flow")
 
         # =====================================================================
         # V2 FAST PATHS: Handle instant responses without full agentic loop
@@ -1745,6 +2276,251 @@ class Agent:
                                     "type": "tool_result",
                                     "tool_use_id": block.id,
                                     "content": f"Image '{resource_name}' not found. Available images: {', '.join([r.name for r in (resources or []) if r.type == 'image'])}"
+                                })
+
+                        # ============================================================
+                        # V3 Tools - Resource Awareness
+                        # ============================================================
+
+                        elif block.name == "list_resources":
+                            type_filter = block.input.get("type_filter")
+                            status_filter = block.input.get("status_filter")
+
+                            # Emit tool call event
+                            yield AgentEvent("tool_call", {
+                                "tool": "list_resources",
+                                "query": f"type={type_filter or 'all'}, status={status_filter or 'all'}"
+                            })
+
+                            # Build resource list
+                            filtered_resources = resources or []
+                            if type_filter:
+                                filtered_resources = [r for r in filtered_resources if r.type == type_filter]
+                            if status_filter:
+                                filtered_resources = [r for r in filtered_resources if r.status == status_filter]
+
+                            if filtered_resources:
+                                # Group by type for clear output
+                                by_type = {}
+                                for r in filtered_resources:
+                                    if r.type not in by_type:
+                                        by_type[r.type] = []
+                                    by_type[r.type].append(r)
+
+                                result_parts = [f"Found {len(filtered_resources)} resource(s) in your workspace:\n"]
+                                for rtype, rlist in by_type.items():
+                                    result_parts.append(f"\n## {rtype.replace('_', ' ').title()}s ({len(rlist)})")
+                                    for r in rlist:
+                                        status_icon = "✓" if r.status == "ready" else "⏳" if r.status in ("pending", "indexing") else "✗"
+                                        summary_text = f": {r.summary[:100]}..." if r.summary and len(r.summary) > 100 else f": {r.summary}" if r.summary else ""
+                                        result_parts.append(f"  {status_icon} {r.name}{summary_text}")
+                                        if r.type == "data_file" and r.columns:
+                                            cols = ", ".join(r.columns[:5])
+                                            if len(r.columns) > 5:
+                                                cols += f"... (+{len(r.columns) - 5} more)"
+                                            result_parts.append(f"    Columns: {cols}")
+                                            if r.row_count:
+                                                result_parts.append(f"    Rows: {r.row_count:,}")
+                                        elif r.type == "image" and r.dimensions:
+                                            result_parts.append(f"    Dimensions: {r.dimensions}")
+
+                                result_content = "\n".join(result_parts)
+                            else:
+                                if type_filter or status_filter:
+                                    result_content = f"No resources found matching filters (type={type_filter or 'any'}, status={status_filter or 'any'})."
+                                else:
+                                    result_content = "No resources in workspace yet. Upload documents, data files, or images to get started."
+
+                            yield AgentEvent("tool_result", {
+                                "tool": "list_resources",
+                                "found": len(filtered_resources),
+                                "query": f"type={type_filter or 'all'}"
+                            })
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_content
+                            })
+
+                        elif block.name == "get_resource_info":
+                            resource_name = block.input.get("resource_name", "")
+
+                            # Emit tool call event
+                            yield AgentEvent("tool_call", {
+                                "tool": "get_resource_info",
+                                "query": resource_name
+                            })
+
+                            # Find the resource
+                            resource_info = None
+                            if resources:
+                                for r in resources:
+                                    if r.name == resource_name or r.name.lower() == resource_name.lower():
+                                        resource_info = r
+                                        break
+
+                            if resource_info:
+                                info_parts = [
+                                    f"## {resource_info.name}",
+                                    f"- **Type:** {resource_info.type.replace('_', ' ').title()}",
+                                    f"- **Status:** {resource_info.status}"
+                                ]
+                                if resource_info.summary:
+                                    info_parts.append(f"- **Summary:** {resource_info.summary}")
+
+                                # Type-specific metadata
+                                if resource_info.type == "data_file":
+                                    if resource_info.row_count:
+                                        info_parts.append(f"- **Rows:** {resource_info.row_count:,}")
+                                    if resource_info.columns:
+                                        info_parts.append(f"- **Columns ({len(resource_info.columns)}):** {', '.join(resource_info.columns)}")
+                                elif resource_info.type == "image":
+                                    if resource_info.dimensions:
+                                        info_parts.append(f"- **Dimensions:** {resource_info.dimensions}")
+
+                                result_content = "\n".join(info_parts)
+                                yield AgentEvent("tool_result", {
+                                    "tool": "get_resource_info",
+                                    "found": 1,
+                                    "query": resource_name
+                                })
+                            else:
+                                result_content = f"Resource '{resource_name}' not found. Use list_resources to see available resources."
+                                yield AgentEvent("tool_result", {
+                                    "tool": "get_resource_info",
+                                    "found": 0,
+                                    "query": resource_name
+                                })
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_content
+                            })
+
+                        elif block.name == "read_resource":
+                            resource_name = block.input.get("resource_name", "")
+                            preview_lines = min(block.input.get("preview_lines", 50), 200)
+
+                            # Emit tool call event
+                            yield AgentEvent("tool_call", {
+                                "tool": "read_resource",
+                                "query": f"{resource_name} (preview: {preview_lines} lines)"
+                            })
+
+                            # Find the resource
+                            resource_info = None
+                            if resources:
+                                for r in resources:
+                                    if r.name == resource_name or r.name.lower() == resource_name.lower():
+                                        resource_info = r
+                                        break
+
+                            if resource_info and resource_info.file_path:
+                                import os as os_module
+                                if not os_module.path.exists(resource_info.file_path):
+                                    yield AgentEvent("tool_result", {
+                                        "tool": "read_resource",
+                                        "found": 0,
+                                        "query": resource_name
+                                    })
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": block.id,
+                                        "content": f"Error: File for '{resource_name}' no longer exists on disk."
+                                    })
+                                else:
+                                    try:
+                                        if resource_info.type == "data_file":
+                                            # For data files, show schema + sample rows
+                                            import pandas as pd
+                                            ext = os_module.path.splitext(resource_info.file_path)[1].lower()
+
+                                            if ext == ".csv":
+                                                df = pd.read_csv(resource_info.file_path, nrows=preview_lines)
+                                            elif ext in (".xlsx", ".xls"):
+                                                df = pd.read_excel(resource_info.file_path, nrows=preview_lines)
+                                            elif ext == ".json":
+                                                df = pd.read_json(resource_info.file_path)
+                                                df = df.head(preview_lines)
+                                            elif ext == ".parquet":
+                                                df = pd.read_parquet(resource_info.file_path)
+                                                df = df.head(preview_lines)
+                                            else:
+                                                df = pd.read_csv(resource_info.file_path, nrows=preview_lines)
+
+                                            # Build schema + preview
+                                            schema = "\n".join([f"  - {col}: {df[col].dtype}" for col in df.columns])
+                                            preview = df.head(min(10, preview_lines)).to_string()
+
+                                            result_content = f"## {resource_name}\n\n**Schema ({len(df.columns)} columns):**\n{schema}\n\n**Preview ({len(df)} rows shown):**\n```\n{preview}\n```"
+
+                                        elif resource_info.type == "image":
+                                            # For images, return a note to use view_image instead
+                                            result_content = f"'{resource_name}' is an image file. Use the view_image tool with a question to analyze its content."
+
+                                        else:
+                                            # For documents/text files, read the content
+                                            with open(resource_info.file_path, "r", encoding="utf-8", errors="ignore") as f:
+                                                lines = []
+                                                for i, line in enumerate(f):
+                                                    if i >= preview_lines:
+                                                        break
+                                                    lines.append(line.rstrip())
+                                                content = "\n".join(lines)
+
+                                            result_content = f"## {resource_name}\n\n**Content preview ({len(lines)} lines):**\n```\n{content}\n```"
+
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "read_resource",
+                                            "found": 1,
+                                            "query": resource_name
+                                        })
+
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": result_content
+                                        })
+
+                                    except Exception as e:
+                                        yield AgentEvent("tool_result", {
+                                            "tool": "read_resource",
+                                            "found": 0,
+                                            "query": resource_name
+                                        })
+                                        tool_results.append({
+                                            "type": "tool_result",
+                                            "tool_use_id": block.id,
+                                            "content": f"Error reading '{resource_name}': {str(e)}"
+                                        })
+                            elif resource_info and not resource_info.file_path:
+                                # Resource exists but no file path (e.g., website, indexed but no local file)
+                                yield AgentEvent("tool_result", {
+                                    "tool": "read_resource",
+                                    "found": 1,
+                                    "query": resource_name
+                                })
+                                info_text = f"'{resource_name}' ({resource_info.type}) has no local file to read directly."
+                                if resource_info.summary:
+                                    info_text += f"\n\n**Summary:** {resource_info.summary}"
+                                info_text += "\n\nUse search_documents to find specific content within this resource."
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": info_text
+                                })
+                            else:
+                                yield AgentEvent("tool_result", {
+                                    "tool": "read_resource",
+                                    "found": 0,
+                                    "query": resource_name
+                                })
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": f"Resource '{resource_name}' not found. Use list_resources to see available resources."
                                 })
 
                 # Emit sources (only for document search)
