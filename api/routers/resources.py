@@ -507,14 +507,21 @@ async def add_resource(
 ):
     """Upload and process a resource file.
 
+    Implements a 3-stage processing pipeline:
+    - Stage 1 (sync): Save file, capture universal metadata (size, mime, hash)
+    - Stage 2 (async): Type-specific extraction (schema, dimensions, etc.)
+    - Stage 3 (async): Semantic enrichment (RAG indexing, LLM descriptions)
+
+    Key guarantee: Files are ALWAYS visible in workspace after Stage 1.
+    If Stage 3 fails, resource gets PARTIAL status (still usable, just not searchable).
+
     Supports multiple file types:
     - Documents (PDF, DOCX, MD, TXT): RAG indexed for semantic search
     - Data files (CSV, Excel, JSON): Schema extraction for analysis
     - Images (PNG, JPG, etc.): Vision description for visual analysis
-
-    If a resource with the same content hash already exists and is READY,
-    we skip processing and just link it to this project.
     """
+    from api.utils.extraction import detect_mime_type
+
     # Verify project exists and belongs to user
     project = db.query(Project).filter(
         Project.id == project_id,
@@ -530,20 +537,32 @@ async def add_resource(
             detail=f"Unsupported file type. Allowed: {format_allowed_extensions()}"
         )
 
-    # Detect file category and resource type
+    # === STAGE 1: Universal Metadata (synchronous) ===
+
+    # Read file content
+    file_content = await file.read()
+    file_size = len(file_content)
+
+    # Detect MIME type and file category
+    mime_type = detect_mime_type(file_content, file.filename)
     file_category = detect_file_category(file.filename)
     resource_type = get_resource_type(file.filename, file_category)
 
-    # Read file content for hashing
-    file_content = await file.read()
+    # Compute content hash for deduplication
     content_hash = compute_content_hash(content=file_content)
 
-    # Check if resource with same hash already exists
+    # Check if resource with same hash already exists and is fully processed
     existing_resource = db.query(Resource).filter(
         Resource.content_hash == content_hash
     ).first()
 
-    if existing_resource and existing_resource.status == ResourceStatus.READY:
+    ready_statuses = (
+        ResourceStatus.READY,
+        ResourceStatus.INDEXED,
+        ResourceStatus.ANALYZED,
+        ResourceStatus.DESCRIBED
+    )
+    if existing_resource and existing_resource.status in ready_statuses:
         # Resource already exists and is indexed - just link to this project
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
@@ -553,17 +572,17 @@ async def add_resource(
     storage = get_storage()
     file_path = storage.save(project_id, file.filename, file_content)
 
-    # Get file size
-    file_size = len(file_content)
-
-    # Create resource record with detected type
+    # Create resource record with Stage 1 metadata
+    # Status = UPLOADED means file is saved and visible, but not yet processed
     resource = Resource(
         type=resource_type,
         source=str(file_path),
         filename=file.filename,
-        status=ResourceStatus.PENDING,
+        status=ResourceStatus.UPLOADED,  # NEW: Visible immediately
         file_size_bytes=file_size,
-        content_hash=content_hash
+        content_hash=content_hash,
+        mime_type=mime_type,  # NEW
+        storage_backend=storage.backend_name if hasattr(storage, 'backend_name') else "local"  # NEW
     )
     db.add(resource)
     db.commit()
@@ -572,22 +591,243 @@ async def add_resource(
     # Create link to this project
     _link_resource_to_project(db, resource, project_id)
 
-    # Route to appropriate processing pipeline based on file category
-    if file_category == FileCategory.RAG:
-        # Traditional RAG indexing for documents
-        background_tasks.add_task(index_document, resource.id, str(file_path))
-    elif file_category == FileCategory.DATA:
-        # Schema extraction and LLM description for data files
-        background_tasks.add_task(index_data_file, resource.id, str(file_path))
-    elif file_category == FileCategory.IMAGE:
-        # Vision description for images
-        background_tasks.add_task(index_image, resource.id, str(file_path))
-    else:
-        # Fallback to document indexing
-        background_tasks.add_task(index_document, resource.id, str(file_path))
+    # === STAGE 2 + 3: Extraction and Enrichment (asynchronous) ===
+    # Route to unified processing pipeline based on file category
+    background_tasks.add_task(
+        process_resource,
+        resource_id=resource.id,
+        file_path=str(file_path),
+        file_category=file_category.value
+    )
 
     db.refresh(resource)
     return resource_to_response(resource)
+
+
+def process_resource(resource_id: str, file_path: str, file_category: str):
+    """Unified background task for Stage 2 (extraction) and Stage 3 (enrichment).
+
+    Implements graceful degradation:
+    - If Stage 2 fails: resource is marked FAILED (can't extract basic info)
+    - If Stage 3 fails: resource is marked PARTIAL (still visible, just not searchable)
+
+    Args:
+        resource_id: The resource ID
+        file_path: Path to the file in storage
+        file_category: One of "rag", "data", "image"
+    """
+    from api.database import SessionLocal
+    from api.utils.extraction import (
+        extract_document_metadata,
+        extract_data_metadata,
+        extract_image_metadata,
+        is_extraction_successful
+    )
+    from datetime import datetime
+    import time
+    import json
+    import tempfile
+    import traceback
+
+    db = SessionLocal()
+    try:
+        resource = db.query(Resource).filter(Resource.id == resource_id).first()
+        if not resource:
+            print(f"[process_resource] Resource {resource_id} not found")
+            return
+
+        # === STAGE 2: Type-specific extraction ===
+        resource.status = ResourceStatus.EXTRACTING
+        db.commit()
+
+        extraction_start = time.time()
+        local_path = None
+
+        try:
+            # Download file from storage to temp location
+            storage = get_storage()
+            file_content = storage.read(file_path)
+
+            # Get file extension for temp file
+            ext = Path(file_path).suffix
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(file_content)
+                local_path = tmp.name
+
+            # Extract type-specific metadata
+            if file_category == "rag":
+                extraction_meta = extract_document_metadata(local_path)
+            elif file_category == "data":
+                extraction_meta = extract_data_metadata(local_path)
+            elif file_category == "image":
+                extraction_meta = extract_image_metadata(local_path)
+            else:
+                # Unknown category - mark as stored with no extraction
+                resource.status = ResourceStatus.STORED
+                resource.extracted_at = datetime.utcnow()
+                db.commit()
+                return
+
+            # Check if extraction succeeded
+            if not is_extraction_successful(extraction_meta):
+                # Extraction failed - resource is unusable
+                resource.status = ResourceStatus.FAILED
+                resource.error_message = extraction_meta.get("extraction_error", "Unknown extraction error")
+                resource.error_stage = "extraction"
+                db.commit()
+                return
+
+            # Save extraction metadata
+            resource.extraction_metadata = json.dumps(extraction_meta)
+            resource.extraction_duration_ms = int((time.time() - extraction_start) * 1000)
+            resource.extracted_at = datetime.utcnow()
+            resource.status = ResourceStatus.EXTRACTED
+            db.commit()
+
+            print(f"[process_resource] Stage 2 complete for {resource_id}: {file_category}")
+
+        except Exception as e:
+            # Stage 2 failed - resource is unusable
+            print(f"[process_resource] Stage 2 failed for {resource_id}: {e}")
+            traceback.print_exc()
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = str(e)
+            resource.error_stage = "extraction"
+            db.commit()
+            return
+
+        # === STAGE 3: Semantic enrichment ===
+        resource.status = ResourceStatus.INDEXING
+        db.commit()
+
+        indexing_start = time.time()
+
+        try:
+            if file_category == "rag":
+                # Full RAG indexing with Pinecone
+                result = _enrich_document(resource_id, local_path, db, resource)
+                resource.status = ResourceStatus.INDEXED
+
+            elif file_category == "data":
+                # LLM description for data files
+                result = _enrich_data_file(resource_id, local_path, db, resource)
+                resource.status = ResourceStatus.ANALYZED
+
+            elif file_category == "image":
+                # Vision description for images
+                result = _enrich_image(resource_id, local_path, db, resource)
+                resource.status = ResourceStatus.DESCRIBED
+
+            # Record timing and summary
+            resource.indexing_duration_ms = int((time.time() - indexing_start) * 1000)
+            resource.indexed_at = datetime.utcnow()
+            if result and result.get("summary"):
+                resource.summary = result["summary"]
+            if result and result.get("chunk_count"):
+                resource.chunk_count = result["chunk_count"]
+            db.commit()
+
+            print(f"[process_resource] Stage 3 complete for {resource_id}: {resource.status.value}")
+
+        except Exception as e:
+            # Stage 3 failed - but resource is still usable! Mark as PARTIAL
+            print(f"[process_resource] Stage 3 failed for {resource_id} (marking PARTIAL): {e}")
+            traceback.print_exc()
+            resource.status = ResourceStatus.PARTIAL
+            resource.error_message = f"Enrichment failed: {str(e)}"
+            resource.error_stage = "indexing"
+            db.commit()
+
+        finally:
+            # Clean up temp file
+            if local_path:
+                import os as temp_os
+                if temp_os.path.exists(local_path):
+                    temp_os.remove(local_path)
+
+    finally:
+        db.close()
+
+
+def _enrich_document(resource_id: str, local_path: str, db, resource) -> dict:
+    """Stage 3 enrichment for RAG documents: chunk, embed, index in Pinecone."""
+    pipeline = get_pipeline()
+    result = pipeline.ingest(
+        local_path,
+        namespace=resource_id,
+        resource_id=resource_id,
+        generate_summary=True
+    )
+    resource.pinecone_namespace = resource_id
+    return {
+        "summary": result.get("summary"),
+        "chunk_count": result.get("chunks", 0)
+    }
+
+
+def _enrich_data_file(resource_id: str, local_path: str, db, resource) -> dict:
+    """Stage 3 enrichment for data files: generate LLM description."""
+    import json
+    import pandas as pd
+    from pathlib import Path
+
+    # Load the extraction metadata to get column info
+    extraction_meta = json.loads(resource.extraction_metadata or "{}")
+    columns = extraction_meta.get("columns", [])
+    row_count = extraction_meta.get("row_count", 0)
+    sample_rows = extraction_meta.get("sample_rows", [])
+
+    # Generate LLM description
+    content_description = _generate_data_description(
+        filename=resource.filename,
+        columns=columns,
+        sample_rows=sample_rows[:3] if sample_rows else [],
+        row_count=row_count,
+    )
+
+    # Also store in DataResourceMetadata for backwards compatibility
+    ext = Path(local_path).suffix.lower()
+    metadata = DataResourceMetadata(
+        resource_id=resource_id,
+        columns_json=json.dumps(columns),
+        row_count=row_count,
+        column_count=len(columns),
+        sheet_names_json=json.dumps(extraction_meta.get("sheet_names")) if extraction_meta.get("sheet_names") else None,
+        sample_rows_json=json.dumps(sample_rows, default=str) if sample_rows else None,
+        content_description=content_description,
+        numeric_summary_json=None,  # Could add from extraction_meta if needed
+    )
+    db.add(metadata)
+
+    return {"summary": content_description}
+
+
+def _enrich_image(resource_id: str, local_path: str, db, resource) -> dict:
+    """Stage 3 enrichment for images: generate vision description."""
+    import json
+
+    # Load extraction metadata to get dimensions
+    extraction_meta = json.loads(resource.extraction_metadata or "{}")
+    dimensions = extraction_meta.get("dimensions", "unknown")
+
+    # Generate vision description
+    vision_description = _generate_image_description(
+        filename=resource.filename,
+        file_path=local_path,
+        dimensions=dimensions
+    )
+
+    # Also store in ImageResourceMetadata for backwards compatibility
+    metadata = ImageResourceMetadata(
+        resource_id=resource_id,
+        width=extraction_meta.get("width"),
+        height=extraction_meta.get("height"),
+        format=extraction_meta.get("format"),
+        vision_description=vision_description,
+    )
+    db.add(metadata)
+
+    return {"summary": vision_description}
 
 
 def index_url(resource_id: str, url: str):

@@ -288,7 +288,13 @@ Use this tool when:
 - User references "the document" or "my files" without being specific
 - You want to help the user understand what they can work with
 
-Returns a list of all resources with their type, status, and summary.""",
+Returns a list of all resources with their type, status, and summary.
+
+Status meanings:
+- ✓ ready/indexed/analyzed/described: Fully processed, searchable
+- ⏳ uploaded/extracting/indexing: Still processing
+- ⚠ partial: File visible but semantic search unavailable (enrichment failed)
+- ✗ failed: Unusable (extraction failed)""",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -299,8 +305,8 @@ Returns a list of all resources with their type, status, and summary.""",
             },
             "status_filter": {
                 "type": "string",
-                "description": "Optional: filter by status ('ready', 'pending', 'indexing', 'failed')",
-                "enum": ["ready", "pending", "indexing", "failed"]
+                "description": "Optional: filter by status",
+                "enum": ["ready", "indexed", "analyzed", "described", "partial", "uploaded", "extracting", "indexing", "failed"]
             }
         },
         "required": []
@@ -2311,9 +2317,28 @@ class Agent:
                                 for rtype, rlist in by_type.items():
                                     result_parts.append(f"\n## {rtype.replace('_', ' ').title()}s ({len(rlist)})")
                                     for r in rlist:
-                                        status_icon = "✓" if r.status == "ready" else "⏳" if r.status in ("pending", "indexing") else "✗"
+                                        # Status icons for new unified flow
+                                        # ✓ = fully processed (ready, indexed, analyzed, described)
+                                        # ⏳ = processing (pending, uploaded, extracting, extracted, indexing)
+                                        # ⚠ = partial (extraction done, but enrichment failed - still usable!)
+                                        # ✗ = failed (unusable)
+                                        ready_statuses = ("ready", "indexed", "analyzed", "described")
+                                        processing_statuses = ("pending", "uploaded", "extracting", "extracted", "indexing", "stored")
+                                        if r.status in ready_statuses:
+                                            status_icon = "✓"
+                                            status_note = ""
+                                        elif r.status == "partial":
+                                            status_icon = "⚠"
+                                            status_note = " [partial - searchable: no]"
+                                        elif r.status in processing_statuses:
+                                            status_icon = "⏳"
+                                            status_note = f" [{r.status}]"
+                                        else:
+                                            status_icon = "✗"
+                                            status_note = " [failed]"
+
                                         summary_text = f": {r.summary[:100]}..." if r.summary and len(r.summary) > 100 else f": {r.summary}" if r.summary else ""
-                                        result_parts.append(f"  {status_icon} {r.name}{summary_text}")
+                                        result_parts.append(f"  {status_icon} {r.name}{status_note}{summary_text}")
                                         if r.type == "data_file" and r.columns:
                                             cols = ", ".join(r.columns[:5])
                                             if len(r.columns) > 5:
