@@ -170,6 +170,27 @@ function ExternalLinkIcon({ className }: { className?: string }) {
   );
 }
 
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" x2="12" y1="15" y2="3" />
+    </svg>
+  );
+}
+
 function formatFileSize(bytes: number | null): string {
   if (!bytes) return "-";
   if (bytes < 1024) return `${bytes} B`;
@@ -335,6 +356,38 @@ export default function LibraryPage() {
     }
   };
 
+  const handleDownload = async (resource: GlobalResource) => {
+    // Only downloadable for document/data_file/image types that have a linked project
+    if (resource.type === "website" || resource.type === "git_repository") {
+      toast.error("Cannot download websites or git repositories");
+      return;
+    }
+    if (resource.projects.length === 0) {
+      toast.error("Link resource to a project to download");
+      return;
+    }
+
+    try {
+      const url = getResourceFileUrl(resource.projects[0], resource.id);
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) throw new Error("Download failed");
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = resource.filename || "download";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+      toast.success("Download started");
+    } catch (error) {
+      console.error("Download failed:", error);
+      toast.error("Failed to download file");
+    }
+  };
+
   // Filter resources based on search query
   const filteredResources = resources.filter((resource) => {
     if (!searchQuery.trim()) return true;
@@ -461,18 +514,17 @@ export default function LibraryPage() {
                         </div>
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive shrink-0"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(resource);
-                      }}
-                      disabled={resource.projects.length > 0}
-                    >
-                      <TrashIcon className="h-4 w-4" />
-                    </Button>
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => handleDelete(resource)}
+                        disabled={resource.projects.length > 0}
+                      >
+                        <TrashIcon className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -544,19 +596,18 @@ export default function LibraryPage() {
                         {formatDate(resource.created_at)}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(resource);
-                          }}
-                          disabled={resource.projects.length > 0}
-                          title={resource.projects.length > 0 ? "Unlink from all projects first" : "Delete resource"}
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </Button>
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                            onClick={() => handleDelete(resource)}
+                            disabled={resource.projects.length > 0}
+                            title={resource.projects.length > 0 ? "Unlink from all projects first" : "Delete resource"}
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -579,27 +630,40 @@ export default function LibraryPage() {
                 </span>
               </div>
               {selectedResource && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2 shrink-0 w-full sm:w-auto"
-                  onClick={() => {
-                    // For websites and git repos, open source URL directly
-                    // For documents, use the file endpoint with first linked project
-                    if (selectedResource.type === "website" || selectedResource.type === "git_repository") {
-                      window.open(selectedResource.source, "_blank");
-                    } else if (selectedResource.projects.length > 0) {
-                      // Use first linked project to view the document
-                      const url = getResourceFileUrl(selectedResource.projects[0], selectedResource.id);
-                      window.open(url, "_blank");
-                    } else {
-                      toast.error("Link resource to a project to view the file");
-                    }
-                  }}
-                >
-                  <ExternalLinkIcon className="h-4 w-4" />
-                  View
-                </Button>
+                <div className="flex gap-2 shrink-0 w-full sm:w-auto">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 flex-1 sm:flex-none"
+                    onClick={() => {
+                      // For websites and git repos, open source URL directly
+                      // For documents, use the file endpoint with first linked project
+                      if (selectedResource.type === "website" || selectedResource.type === "git_repository") {
+                        window.open(selectedResource.source, "_blank");
+                      } else if (selectedResource.projects.length > 0) {
+                        // Use first linked project to view the document
+                        const url = getResourceFileUrl(selectedResource.projects[0], selectedResource.id);
+                        window.open(url, "_blank");
+                      } else {
+                        toast.error("Link resource to a project to view the file");
+                      }
+                    }}
+                  >
+                    <ExternalLinkIcon className="h-4 w-4" />
+                    View
+                  </Button>
+                  {selectedResource.type !== "website" && selectedResource.type !== "git_repository" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 flex-1 sm:flex-none"
+                      onClick={() => handleDownload(selectedResource)}
+                    >
+                      <DownloadIcon className="h-4 w-4" />
+                      Download
+                    </Button>
+                  )}
+                </div>
               )}
             </DialogTitle>
             {selectedResource?.summary && (

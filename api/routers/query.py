@@ -48,16 +48,16 @@ def get_agent(version: Optional[str] = None):
 def _build_resources_list(project) -> list[ResourceInfo]:
     """Build a list of ResourceInfo from project resources with metadata.
 
-    Only includes resources with READY status to avoid presenting failed
-    or pending resources to the agent.
+    Includes all resources except failed ones, so the agent can see files
+    that are still processing (uploaded, extracting, indexing, etc.).
     """
     import json
     import os
 
     resources = []
     for r in project.resources:
-        # Only include READY resources - skip failed/pending/indexing
-        if r.status.value != "ready":
+        # Skip only failed resources - show everything else including processing
+        if r.status.value == "failed":
             continue
 
         # For data files and images, verify the file actually exists

@@ -811,10 +811,9 @@ def _enrich_image(resource_id: str, local_path: str, db, resource) -> dict:
     dimensions = extraction_meta.get("dimensions", "unknown")
 
     # Generate vision description
-    vision_description = _generate_image_description(
-        filename=resource.filename,
+    vision_description = _generate_vision_description(
         file_path=local_path,
-        dimensions=dimensions
+        filename=resource.filename
     )
 
     # Also store in ImageResourceMetadata for backwards compatibility
