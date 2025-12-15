@@ -154,8 +154,8 @@ async def job_stream(websocket: WebSocket, job_id: str):
 
         # Stream events from Redis to WebSocket
         while True:
-            # Check for messages with a timeout
-            message = pubsub.get_message(timeout=0.1)
+            # Check for messages with minimal timeout for low latency
+            message = pubsub.get_message(timeout=0.01)
 
             if message and message["type"] == "message":
                 # Parse and forward the event to WebSocket
@@ -169,8 +169,8 @@ async def job_stream(websocket: WebSocket, job_id: str):
                 except json.JSONDecodeError:
                     pass
 
-            # Small sleep to prevent busy loop
-            await asyncio.sleep(0.01)
+            # Minimal sleep to prevent busy loop while maintaining responsiveness
+            await asyncio.sleep(0.001)
 
             # Check if websocket is still connected by trying to receive
             # (This handles client disconnection)
@@ -258,7 +258,7 @@ async def project_stream(websocket: WebSocket, project_id: str):
         # Main event loop
         while True:
             # Check for project-level updates (job_update events for sidebar)
-            project_msg = project_pubsub.get_message(timeout=0.05)
+            project_msg = project_pubsub.get_message(timeout=0.01)
             if project_msg and project_msg["type"] == "message":
                 try:
                     event = json.loads(project_msg["data"])
@@ -269,7 +269,7 @@ async def project_stream(websocket: WebSocket, project_id: str):
 
             # Check for job-specific events (only if subscribed to a thread)
             if job_pubsub:
-                job_msg = job_pubsub.get_message(timeout=0.05)
+                job_msg = job_pubsub.get_message(timeout=0.01)
                 if job_msg and job_msg["type"] == "message":
                     try:
                         event = json.loads(job_msg["data"])
@@ -385,7 +385,7 @@ async def project_stream(websocket: WebSocket, project_id: str):
             except WebSocketDisconnect:
                 break
 
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.001)
 
     except WebSocketDisconnect:
         pass
@@ -443,7 +443,7 @@ async def project_active_jobs_stream(websocket: WebSocket, project_id: str):
 
         # Stream updates
         while True:
-            message = pubsub.get_message(timeout=0.1)
+            message = pubsub.get_message(timeout=0.01)
 
             if message and message["type"] == "message":
                 try:
@@ -452,7 +452,7 @@ async def project_active_jobs_stream(websocket: WebSocket, project_id: str):
                 except json.JSONDecodeError:
                     pass
 
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.001)
 
             # Check for client disconnect
             try:
@@ -611,7 +611,7 @@ async def app_stream(websocket: WebSocket):
             # Check for global job updates (only if Redis available)
             if global_pubsub and redis_available:
                 try:
-                    global_msg = global_pubsub.get_message(timeout=0.05)
+                    global_msg = global_pubsub.get_message(timeout=0.01)
                     if global_msg and global_msg["type"] == "message":
                         try:
                             event = json.loads(global_msg["data"])
@@ -627,7 +627,7 @@ async def app_stream(websocket: WebSocket):
             # Check for job-specific events (only if subscribed and Redis available)
             if job_pubsub and subscribed_job_id and redis_available:
                 try:
-                    job_msg = job_pubsub.get_message(timeout=0.05)
+                    job_msg = job_pubsub.get_message(timeout=0.01)
                     if job_msg and job_msg["type"] == "message":
                         try:
                             event = json.loads(job_msg["data"])
@@ -747,7 +747,7 @@ async def app_stream(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
 
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.001)
 
     except WebSocketDisconnect:
         pass

@@ -33,6 +33,7 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
     Publish an event to the job's Redis channel AND update accumulated state.
 
     State is stored in Redis so late joiners can see the current state immediately.
+    Uses Redis pipelines to batch operations and reduce round-trips for lower latency.
 
     The agent state includes:
     - current_phase: What phase the agent is in (initializing, planning, searching, thinking, responding, done)
@@ -47,14 +48,18 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
     message = json.dumps(event)
 
     state_key = get_job_state_key(job_id)
+    channel = get_job_channel(job_id)
     data = data or {}
+
+    # Use pipeline to batch Redis operations for lower latency
+    pipe = redis_client.pipeline()
 
     # Update accumulated state based on event type
     if event_type == "phase":
         # Explicit phase update
-        redis_client.hset(state_key, "current_phase", data.get("phase", ""))
-        redis_client.hset(state_key, "current_action", data.get("action", ""))
-        # Also add to activity history
+        pipe.hset(state_key, "current_phase", data.get("phase", ""))
+        pipe.hset(state_key, "current_action", data.get("action", ""))
+        # Also add to activity history - need to read first
         activity = redis_client.hget(state_key, "activity") or "[]"
         activity_list = json.loads(activity)
         activity_list.append({
@@ -64,95 +69,102 @@ def publish_job_event(job_id: str, event_type: str, data: dict = None):
             "phase": data.get("phase", ""),
             "action": data.get("action", ""),
         })
-        redis_client.hset(state_key, "activity", json.dumps(activity_list))
+        pipe.hset(state_key, "activity", json.dumps(activity_list))
 
     elif event_type == "plan":
         # Plan event sets phase to "planning" and stores the acknowledgment as current_action
-        redis_client.hset(state_key, "current_phase", "planning")
-        redis_client.hset(state_key, "current_action", data.get("acknowledgment", ""))
-        # Keep acknowledgment for backwards compatibility
-        redis_client.hset(state_key, "acknowledgment", data.get("acknowledgment", ""))
+        pipe.hset(state_key, mapping={
+            "current_phase": "planning",
+            "current_action": data.get("acknowledgment", ""),
+            "acknowledgment": data.get("acknowledgment", ""),  # backwards compat
+        })
 
     elif event_type == "chunk":
         # First chunk moves to "responding" phase
+        # For chunks, we need current state so fetch it first
         current_phase = redis_client.hget(state_key, "current_phase")
+        current_content = redis_client.hget(state_key, "content") or ""
+        updates = {"content": current_content + data.get("content", "")}
         if current_phase != "responding":
-            redis_client.hset(state_key, "current_phase", "responding")
-            redis_client.hset(state_key, "current_action", "")
-        # Append to accumulated content
-        current = redis_client.hget(state_key, "content") or ""
-        redis_client.hset(state_key, "content", current + data.get("content", ""))
+            updates["current_phase"] = "responding"
+            updates["current_action"] = ""
+        pipe.hset(state_key, mapping=updates)
 
     elif event_type == "sources":
         # Store sources
-        redis_client.hset(state_key, "sources", json.dumps(data.get("sources", [])))
+        pipe.hset(state_key, "sources", json.dumps(data.get("sources", [])))
 
     elif event_type == "tool_call":
         # Tool call sets phase to "searching"
-        # Agent events use "tool" field, not "name"
         tool_name = data.get("tool", data.get("name", "documents"))
         query = data.get("query", "")
-        redis_client.hset(state_key, "current_phase", "searching")
-        redis_client.hset(state_key, "current_action", f"Searching {tool_name}")
-        # Append to activity log with timestamp
+        # Fetch activity log and update atomically
         activity = redis_client.hget(state_key, "activity") or "[]"
         activity_list = json.loads(activity)
         activity_list.append({
             "id": data.get("id", str(uuid.uuid4())),
             "type": "tool_call",
             "timestamp": time.time(),
-            "name": tool_name,  # Store as "name" for consistency with frontend expectations
-            "tool": tool_name,  # Also store as "tool" for consistency
-            "query": query,     # The search query or resource name
+            "name": tool_name,
+            "tool": tool_name,
+            "query": query,
             "input": data.get("input"),
         })
-        redis_client.hset(state_key, "activity", json.dumps(activity_list))
+        pipe.hset(state_key, mapping={
+            "current_phase": "searching",
+            "current_action": f"Searching {tool_name}",
+            "activity": json.dumps(activity_list),
+        })
 
     elif event_type == "tool_result":
-        # Tool result - update activity and may change phase
+        # Tool result - update activity and change phase
         activity = redis_client.hget(state_key, "activity") or "[]"
         activity_list = json.loads(activity)
         activity_list.append({
             "id": str(uuid.uuid4()),
             "type": "tool_result",
             "timestamp": time.time(),
-            "tool": data.get("tool"),  # Tool name from agent event
-            "query": data.get("query", ""),  # The search query for display
+            "tool": data.get("tool"),
+            "query": data.get("query", ""),
             "tool_call_id": data.get("tool_call_id"),
             "found": data.get("found"),
         })
-        redis_client.hset(state_key, "activity", json.dumps(activity_list))
-        # After tool result, move to "thinking" phase (processing results)
-        redis_client.hset(state_key, "current_phase", "thinking")
-        redis_client.hset(state_key, "current_action", "Processing results")
+        pipe.hset(state_key, mapping={
+            "current_phase": "thinking",
+            "current_action": "Processing results",
+            "activity": json.dumps(activity_list),
+        })
 
     elif event_type == "status":
         status = data.get("status", "")
-        redis_client.hset(state_key, "status", status)
+        pipe.hset(state_key, "status", status)
         # If status is "running" and no phase set yet, initialize
         if status == "running":
             current_phase = redis_client.hget(state_key, "current_phase")
             if not current_phase:
-                redis_client.hset(state_key, "current_phase", "initializing")
-                redis_client.hset(state_key, "current_action", "")
+                pipe.hset(state_key, mapping={
+                    "current_phase": "initializing",
+                    "current_action": "",
+                })
             # Set started_at if not already set
             if not redis_client.hget(state_key, "started_at"):
-                redis_client.hset(state_key, "started_at", str(time.time()))
+                pipe.hset(state_key, "started_at", str(time.time()))
 
     elif event_type == "thinking":
         # Extended thinking - set phase to "thinking"
-        redis_client.hset(state_key, "current_phase", "thinking")
-        redis_client.hset(state_key, "current_action", "Deep thinking")
-        # Append thinking content
-        current = redis_client.hget(state_key, "thinking") or ""
-        redis_client.hset(state_key, "thinking", current + data.get("content", ""))
+        current_thinking = redis_client.hget(state_key, "thinking") or ""
+        pipe.hset(state_key, mapping={
+            "current_phase": "thinking",
+            "current_action": "Deep thinking",
+            "thinking": current_thinking + data.get("content", ""),
+        })
 
-    # Set TTL of 1 hour on the state
-    redis_client.expire(state_key, 3600)
+    # Set TTL of 1 hour on the state and publish to channel
+    pipe.expire(state_key, 3600)
+    pipe.publish(channel, message)
 
-    # Publish to channel for real-time subscribers
-    channel = get_job_channel(job_id)
-    redis_client.publish(channel, message)
+    # Execute all batched operations in a single round-trip
+    pipe.execute()
 
 
 def get_job_state(job_id: str) -> dict:

@@ -259,7 +259,9 @@ def process_conversation_task(self, job_id: str):
         accumulated_content = ""
         all_sources = []
         last_save_length = 0
-        SAVE_INTERVAL = 100  # Save every ~100 chars for more responsive UI
+        # Save every ~500 chars - real-time streaming happens via Redis pub/sub,
+        # DB saves are just for backup/recovery, so we can be less frequent
+        SAVE_INTERVAL = 500
 
         for event in agent.chat_stream_events(
             message=job.user_message_content,
