@@ -252,7 +252,18 @@ export async function uploadResource(
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error("Failed to upload resource");
+  if (!res.ok) {
+    // Try to get error details from response
+    let errorMessage = "Failed to upload resource";
+    try {
+      const errorData = await res.json();
+      errorMessage = errorData.detail || errorData.message || errorMessage;
+    } catch {
+      // If we can't parse the error, use status text
+      errorMessage = `Upload failed: ${res.status} ${res.statusText}`;
+    }
+    throw new Error(errorMessage);
+  }
   return res.json();
 }
 

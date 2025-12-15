@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Resource, GlobalResource, uploadResource, deleteResource, getResourceFileUrl, addUrlResource, addGitResource, reindexResource, getResource, listGlobalResources, linkResourceToProject } from "@/lib/api";
+import { Resource, GlobalResource, uploadResource, deleteResource, getResourceFileUrl, addUrlResource, addGitResource, reindexResource, listGlobalResources, linkResourceToProject } from "@/lib/api";
 import { toast } from "sonner";
 
 // Authenticated image component - fetches with credentials
@@ -94,7 +94,14 @@ const PdfViewer = dynamic(
 interface ResourcePanelProps {
   projectId: string;
   resources: Resource[];
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void | unknown>;
+}
+
+// Pending upload for optimistic UI
+interface PendingUpload {
+  id: string;  // temp ID
+  filename: string;
+  type: Resource["type"];
 }
 
 // Helper functions for status normalization
@@ -491,6 +498,14 @@ function formatRowCount(count: number): string {
   return count.toString();
 }
 
+// Detect resource type from filename
+function detectResourceType(filename: string): Resource["type"] {
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  if (["csv", "xlsx", "xls", "json", "parquet", "tsv"].includes(ext)) return "data_file";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff"].includes(ext)) return "image";
+  return "document";
+}
+
 // Get icon component for resource type
 function ResourceTypeIcon({ type, className }: { type: Resource["type"]; className?: string }) {
   switch (type) {
@@ -525,13 +540,33 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
   const [libraryResources, setLibraryResources] = useState<GlobalResource[]>([]);
   const [isLoadingLibrary, setIsLoadingLibrary] = useState(false);
   const [linkingResourceId, setLinkingResourceId] = useState<string | null>(null);
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Track current project to prevent stale polling updates
-  const currentProjectIdRef = useRef(projectId);
+  // Clear pending uploads when project changes
   useEffect(() => {
-    currentProjectIdRef.current = projectId;
+    setPendingUploads([]);
   }, [projectId]);
+
+  // Clean up pending uploads when their corresponding resources appear
+  // Only depends on resources - runs when resources prop changes (after onRefresh)
+  useEffect(() => {
+    if (resources.length === 0) return;
+
+    // Check if any pending upload now has a matching resource (by filename)
+    const resourceFilenames = new Set(
+      resources
+        .filter(r => r.filename) // Only include resources with filenames
+        .map(r => r.filename!.toLowerCase())
+    );
+
+    setPendingUploads(prev => {
+      if (prev.length === 0) return prev;
+      const filtered = prev.filter(p => !resourceFilenames.has(p.filename.toLowerCase()));
+      // Only update if something changed
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [resources]);
 
   const toggleExpanded = (resourceId: string) => {
     setExpandedResources(prev => {
@@ -547,51 +582,65 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
 
   const handleFiles = async (files: FileList | null, closeDialog: boolean = false) => {
     if (!files || files.length === 0) return;
+
+    // Convert FileList to Array immediately - FileList is a live DOM collection
+    // that can become invalid if the file input is unmounted (e.g., when dialog closes)
+    const fileArray = Array.from(files);
+
+    // Create pending uploads optimistically
+    const newPendingUploads: PendingUpload[] = fileArray.map((file, index) => ({
+      id: `pending-${Date.now()}-${index}`,
+      filename: file.name,
+      type: detectResourceType(file.name),
+    }));
+
+    setPendingUploads(prev => [...prev, ...newPendingUploads]);
+
+    if (closeDialog) {
+      setAddDialogOpen(false);
+    }
+
     setIsUploading(true);
+    const successCount = { value: 0 };
+    const failedPendingIds: string[] = [];
+
     try {
-      const uploadedResources: Resource[] = [];
-      for (const file of Array.from(files)) {
-        const resource = await uploadResource(projectId, file);
-        uploadedResources.push(resource);
-      }
-      onRefresh();
-      if (closeDialog) {
-        setAddDialogOpen(false);
-      }
-      toast.success(files.length === 1 ? "File uploaded, indexing..." : `${files.length} files uploaded, indexing...`);
-
-      // Poll for completion of each uploaded resource
-      for (const resource of uploadedResources) {
-        const resourceName = resource.filename || resource.source;
-        const originalWorkspaceId = projectId;
-        const checkStatus = async (): Promise<void> => {
-          // Stop polling if workspace changed
-          if (currentProjectIdRef.current !== originalWorkspaceId) return;
-          try {
-            const updated = await getResource(originalWorkspaceId, resource.id);
-            // Check again after the async call
-            if (currentProjectIdRef.current !== originalWorkspaceId) return;
-            onRefresh();
-
-            if (isReadyStatus(updated.status)) {
-              const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
-              toast.success(`Indexed "${resourceName}"${duration}`);
-            } else if (isPartialStatus(updated.status)) {
-              toast.success(`Uploaded "${resourceName}" (partial - enrichment skipped)`);
-            } else if (isFailedStatus(updated.status)) {
-              toast.error(`Failed to index "${resourceName}"`);
-            } else if (isProcessingStatus(updated.status)) {
-              setTimeout(checkStatus, 2000);
-            }
-          } catch (error) {
-            console.error("Failed to check index status:", error);
+      // Upload files sequentially to avoid exhausting database connection pool
+      for (const file of fileArray) {
+        const pendingUpload = newPendingUploads.find(p => p.filename === file.name);
+        try {
+          await uploadResource(projectId, file);
+          successCount.value++;
+          // Don't remove pending upload here - let cleanup effect handle it
+          // when real resource appears after onRefresh()
+        } catch (error) {
+          console.error(`Failed to upload ${file.name}:`, error);
+          const errorMessage = error instanceof Error ? error.message : "Unknown error";
+          toast.error(`Failed to upload ${file.name}: ${errorMessage}`);
+          // Track failed uploads to remove them
+          if (pendingUpload) {
+            failedPendingIds.push(pendingUpload.id);
           }
-        };
-        setTimeout(checkStatus, 2000);
+        }
       }
+
+      // Remove only failed pending uploads immediately
+      if (failedPendingIds.length > 0) {
+        setPendingUploads(prev => prev.filter(p => !failedPendingIds.includes(p.id)));
+      }
+
+      if (successCount.value > 0) {
+        // Refresh to get real resources - cleanup effect will remove matching pending uploads
+        await onRefresh();
+        toast.success(successCount.value === 1 ? "File uploaded, indexing..." : `${successCount.value} files uploaded, indexing...`);
+      }
+      // Parent context handles polling for status updates via fetchProjectDetail
     } catch (error) {
       console.error("Failed to upload:", error);
-      toast.error("Failed to upload file. Please try again.");
+      // Clear any remaining pending uploads for this batch
+      const pendingIds = new Set(newPendingUploads.map(p => p.id));
+      setPendingUploads(prev => prev.filter(p => !pendingIds.has(p.id)));
+      toast.error("Failed to upload files. Please try again.");
     } finally {
       setIsUploading(false);
     }
@@ -601,52 +650,43 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
     if (!urlInput.trim()) return;
 
     // Basic URL validation
+    let url: URL;
     try {
-      new URL(urlInput.trim());
+      url = new URL(urlInput.trim());
     } catch {
       setUrlError("Please enter a valid URL");
       return;
     }
 
+    // Capture URL before resetting input
+    const urlString = urlInput.trim();
+
+    // Create optimistic pending upload
+    const pendingId = `pending-url-${Date.now()}`;
+    const pendingUpload: PendingUpload = {
+      id: pendingId,
+      filename: url.hostname + url.pathname.slice(0, 30),
+      type: "website",
+    };
+    setPendingUploads(prev => [...prev, pendingUpload]);
+
+    // Close dialog and reset immediately
+    setUrlInput("");
+    setAddDialogOpen(false);
+
     setIsAddingUrl(true);
     setUrlError(null);
     try {
-      const resource = await addUrlResource(projectId, urlInput.trim());
-      const resourceName = resource.filename || resource.source;
-      const originalWorkspaceId = projectId;
+      await addUrlResource(projectId, urlString);
+      // Remove pending upload
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
       onRefresh();
-      setUrlInput("");
-      setAddDialogOpen(false);
       toast.success("Website added, indexing...");
-
-      // Poll for completion
-      const checkStatus = async (): Promise<void> => {
-        // Stop polling if workspace changed
-        if (currentProjectIdRef.current !== originalWorkspaceId) return;
-        try {
-          const updated = await getResource(originalWorkspaceId, resource.id);
-          // Check again after the async call
-          if (currentProjectIdRef.current !== originalWorkspaceId) return;
-          onRefresh();
-
-          if (isReadyStatus(updated.status)) {
-            const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
-            toast.success(`Indexed "${resourceName}"${duration}`);
-          } else if (isPartialStatus(updated.status)) {
-            toast.success(`Added "${resourceName}" (partial - enrichment skipped)`);
-          } else if (isFailedStatus(updated.status)) {
-            toast.error(`Failed to index "${resourceName}"`);
-          } else if (isProcessingStatus(updated.status)) {
-            setTimeout(checkStatus, 2000);
-          }
-        } catch (error) {
-          console.error("Failed to check index status:", error);
-        }
-      };
-      setTimeout(checkStatus, 2000);
+      // Parent context handles polling for status updates
     } catch (error) {
       console.error("Failed to add URL:", error);
-      setUrlError("Failed to add URL. Please try again.");
+      // Remove pending upload on error
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
       toast.error("Failed to add website. Please try again.");
     } finally {
       setIsAddingUrl(false);
@@ -657,57 +697,47 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
     if (!gitUrlInput.trim()) return;
 
     // Basic URL validation
+    let url: URL;
     try {
-      new URL(gitUrlInput.trim());
+      url = new URL(gitUrlInput.trim());
     } catch {
       setGitError("Please enter a valid repository URL");
       return;
     }
 
+    // Capture inputs before resetting
+    const gitUrl = gitUrlInput.trim();
+    const gitBranch = gitBranchInput.trim() || undefined;
+
+    // Create optimistic pending upload
+    const pendingId = `pending-git-${Date.now()}`;
+    // Extract repo name from URL (e.g., "github.com/user/repo" -> "repo")
+    const repoName = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+    const pendingUpload: PendingUpload = {
+      id: pendingId,
+      filename: repoName,
+      type: "git_repository",
+    };
+    setPendingUploads(prev => [...prev, pendingUpload]);
+
+    // Close dialog and reset immediately
+    setGitUrlInput("");
+    setGitBranchInput("");
+    setAddDialogOpen(false);
+
     setIsAddingGit(true);
     setGitError(null);
     try {
-      const resource = await addGitResource(
-        projectId,
-        gitUrlInput.trim(),
-        gitBranchInput.trim() || undefined
-      );
-      const resourceName = resource.filename || resource.source;
-      const originalWorkspaceId = projectId;
+      await addGitResource(projectId, gitUrl, gitBranch);
+      // Remove pending upload
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
       onRefresh();
-      setGitUrlInput("");
-      setGitBranchInput("");
-      setAddDialogOpen(false);
       toast.success("Repository added, cloning and indexing...");
-
-      // Poll for completion
-      const checkStatus = async (): Promise<void> => {
-        // Stop polling if workspace changed
-        if (currentProjectIdRef.current !== originalWorkspaceId) return;
-        try {
-          const updated = await getResource(originalWorkspaceId, resource.id);
-          // Check again after the async call
-          if (currentProjectIdRef.current !== originalWorkspaceId) return;
-          onRefresh();
-
-          if (isReadyStatus(updated.status)) {
-            const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
-            toast.success(`Indexed "${resourceName}"${duration}`);
-          } else if (isPartialStatus(updated.status)) {
-            toast.success(`Added "${resourceName}" (partial - enrichment skipped)`);
-          } else if (isFailedStatus(updated.status)) {
-            toast.error(`Failed to index "${resourceName}": ${updated.error_message || "Unknown error"}`);
-          } else if (isProcessingStatus(updated.status)) {
-            setTimeout(checkStatus, 3000); // Git repos take longer, poll less frequently
-          }
-        } catch (error) {
-          console.error("Failed to check index status:", error);
-        }
-      };
-      setTimeout(checkStatus, 3000);
+      // Parent context handles polling for status updates
     } catch (error) {
       console.error("Failed to add git repository:", error);
-      setGitError("Failed to add repository. Please try again.");
+      // Remove pending upload on error
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
       toast.error("Failed to add repository. Please try again.");
     } finally {
       setIsAddingGit(false);
@@ -783,38 +813,10 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
 
   const handleReindex = async (resourceId: string) => {
     try {
-      const resource = await reindexResource(projectId, resourceId);
-      const resourceName = resource.filename || resource.source;
-      const originalWorkspaceId = projectId;
+      await reindexResource(projectId, resourceId);
       onRefresh();
-
-      // Poll for completion using the API
-      const checkStatus = async (): Promise<void> => {
-        // Stop polling if workspace changed
-        if (currentProjectIdRef.current !== originalWorkspaceId) return;
-        try {
-          const updated = await getResource(originalWorkspaceId, resourceId);
-          // Check again after the async call
-          if (currentProjectIdRef.current !== originalWorkspaceId) return;
-          onRefresh();
-
-          if (isReadyStatus(updated.status)) {
-            const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
-            toast.success(`Reindexed "${resourceName}"${duration}`);
-          } else if (isPartialStatus(updated.status)) {
-            toast.success(`Reprocessed "${resourceName}" (partial - enrichment skipped)`);
-          } else if (isFailedStatus(updated.status)) {
-            toast.error(`Failed to reindex "${resourceName}"`);
-          } else if (isProcessingStatus(updated.status)) {
-            // Still processing, check again in 2 seconds
-            setTimeout(checkStatus, 2000);
-          }
-        } catch (error) {
-          console.error("Failed to check reindex status:", error);
-        }
-      };
-      // Start polling after a short delay
-      setTimeout(checkStatus, 2000);
+      toast.success("Reindexing started...");
+      // Parent context handles polling for status updates
     } catch (error) {
       console.error("Failed to reindex:", error);
       toast.error("Failed to start reindex. Please try again.");
@@ -872,11 +874,23 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
         {/* Resource list */}
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="space-y-1.5">
-            {resources.length === 0 && (
+            {resources.length === 0 && pendingUploads.length === 0 && (
               <p className="text-xs text-muted-foreground text-center py-4">
                 {dragActive ? "Drop files here" : "No resources yet"}
               </p>
             )}
+
+            {/* Pending uploads (optimistic) */}
+            {pendingUploads.map((pending) => (
+              <div key={pending.id} className="rounded-md bg-muted/50 overflow-hidden opacity-70">
+                <div className="flex items-center p-2 text-xs">
+                  <Spinner className="w-3 h-3 flex-shrink-0 mr-2 text-blue-500" />
+                  <ResourceTypeIcon type={pending.type} className="w-3.5 h-3.5 flex-shrink-0 mr-1.5 text-muted-foreground" />
+                  <span className="flex-1 min-w-0 truncate">{pending.filename}</span>
+                </div>
+              </div>
+            ))}
+
             {resources.map((resource) => {
                 const isExpanded = expandedResources.has(resource.id);
                 const canReindex = isReadyStatus(resource.status) || isFailedStatus(resource.status) || isPartialStatus(resource.status);

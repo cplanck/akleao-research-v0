@@ -9,12 +9,13 @@ from api.tasks import celery_app, publish_job_event, get_job_state
 from api.routers.websocket import publish_project_job_update, publish_global_job_update
 from api.database import (
     SessionLocal, ConversationJob, Message, Notification, Thread, Project, Finding,
-    JobStatus, NotificationType, MessageRole
+    JobStatus, NotificationType, MessageRole, Resource, ProjectResource
 )
 from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
 from rag.retriever import Retriever
 from rag.agent import Agent, ResourceInfo
+from rag.tools import ToolContext
 
 # Load environment
 load_dotenv()
@@ -39,14 +40,24 @@ def get_agent():
     return Agent(retriever=retriever, api_key=anthropic_key, tavily_api_key=tavily_key)
 
 
-def _build_resources_list(project) -> list[ResourceInfo]:
+def _build_resources_list(db, project_id: str) -> list[ResourceInfo]:
     """Build a list of ResourceInfo from project resources with metadata.
+
+    Uses explicit query to ensure fresh data from database, avoiding stale
+    lazy-loaded relationships.
 
     Includes all resources except failed ones, so the agent can see files
     that are still processing (uploaded, extracting, indexing, etc.).
     """
+    # Explicitly query resources via ProjectResource join to ensure fresh data
+    db_resources = db.query(Resource).join(
+        ProjectResource, ProjectResource.resource_id == Resource.id
+    ).filter(
+        ProjectResource.project_id == project_id
+    ).all()
+
     resources = []
-    for r in project.resources:
+    for r in db_resources:
         # Skip only failed resources - show everything else including processing
         if r.status.value == "failed":
             continue
@@ -88,10 +99,20 @@ def _build_resources_list(project) -> list[ResourceInfo]:
     return resources
 
 
-def _get_resource_namespaces(project) -> list[str]:
-    """Get unique namespaces from project resources."""
+def _get_resource_namespaces(db, project_id: str) -> list[str]:
+    """Get unique namespaces from project resources.
+
+    Uses explicit query to ensure fresh data from database.
+    """
+    # Explicitly query resources via ProjectResource join to ensure fresh data
+    db_resources = db.query(Resource).join(
+        ProjectResource, ProjectResource.resource_id == Resource.id
+    ).filter(
+        ProjectResource.project_id == project_id
+    ).all()
+
     namespaces = set()
-    for r in project.resources:
+    for r in db_resources:
         if r.status.value == "ready":
             if r.pinecone_namespace:
                 namespaces.add(r.pinecone_namespace)
@@ -212,8 +233,8 @@ def process_conversation_task(self, job_id: str):
             return {"status": "error", "message": "Project or thread not found"}
 
         # Build resources list and namespaces
-        resources = _build_resources_list(project)
-        namespaces = _get_resource_namespaces(project)
+        resources = _build_resources_list(db, project.id)
+        namespaces = _get_resource_namespaces(db, project.id)
 
         # Check resource types
         has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
@@ -245,19 +266,18 @@ def process_conversation_task(self, job_id: str):
         # Initialize agent
         agent = get_agent()
 
-        # Create save_finding callback with access to db context
-        def save_finding_callback(content: str, note: str | None) -> dict:
-            """Save a finding to the database."""
-            db_finding = Finding(
-                project_id=job.project_id,
-                thread_id=job.thread_id,
-                content=content,
-                note=note
-            )
-            db.add(db_finding)
-            db.commit()
-            db.refresh(db_finding)
-            return {"id": db_finding.id, "content": db_finding.content}
+        # Create ToolContext with all necessary dependencies
+        # This gives tools direct access to DB, API clients, and project info
+        tool_context = ToolContext(
+            db=db,
+            project_id=job.project_id,
+            thread_id=job.thread_id,
+            retriever=agent.retriever,
+            namespaces=namespaces,
+            anthropic_client=agent.client,
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+            tavily_api_key=os.getenv("TAVILY_API_KEY"),
+        )
 
         # Process conversation
         accumulated_content = ""
@@ -276,9 +296,7 @@ def process_conversation_task(self, job_id: str):
             resources=resources,
             system_instructions=combined_instructions if combined_instructions else None,
             context_only=bool(job.context_only),
-            save_finding_callback=save_finding_callback,
-            has_data_files=has_data_files,
-            has_images=has_images,
+            tool_context=tool_context,
         ):
             if event.type == "chunk":
                 accumulated_content += event.data["content"]

@@ -581,7 +581,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   // REFS: For tracking during streaming
   // ============================================
   const scrollRef = useRef<HTMLDivElement>(null);
-  const streamingRef = useRef<string>("");
+  const streamingRef = useRef<string>("");  // All accumulated content (including partial words)
+  const displayedRef = useRef<string>("");  // Content shown to user (only complete words)
   const sourcesRef = useRef<SourceInfo[]>([]);
   const pendingUpdateRef = useRef<boolean>(false);  // Track if we have a pending RAF update
   const rafIdRef = useRef<number | null>(null);  // RAF handle for cleanup
@@ -774,6 +775,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     setShowToolCalls(null);
     hasGeneratedTitleRef.current = false;  // Reset title generation tracking
     streamingRef.current = "";
+    displayedRef.current = "";
     sourcesRef.current = [];
     currentJobIdRef.current = null;
 
@@ -897,12 +899,36 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
           pendingUpdateRef.current = true;
           rafIdRef.current = requestAnimationFrame(() => {
             pendingUpdateRef.current = false;
-            const currentContent = streamingRef.current;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === `job-${currentJobId}` ? { ...m, content: currentContent } : m
-              )
-            );
+
+            // Word-boundary buffering: only show complete words
+            // Find the last word boundary (space, newline, or punctuation followed by space)
+            const fullContent = streamingRef.current;
+            let displayEnd = fullContent.length;
+
+            // Look backwards for last word boundary
+            for (let i = fullContent.length - 1; i >= 0; i--) {
+              const char = fullContent[i];
+              if (char === ' ' || char === '\n' || char === '\t') {
+                displayEnd = i + 1;  // Include the space/newline
+                break;
+              }
+              // Also break on punctuation that typically ends words
+              if (i < fullContent.length - 1 && /[.,:;!?)\]}>]/.test(char)) {
+                displayEnd = i + 1;
+                break;
+              }
+            }
+
+            // Only update if we have new complete words to show
+            const displayContent = fullContent.substring(0, displayEnd);
+            if (displayContent.length > displayedRef.current.length) {
+              displayedRef.current = displayContent;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === `job-${currentJobId}` ? { ...m, content: displayContent } : m
+                )
+              );
+            }
           });
         }
         break;
@@ -952,6 +978,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         // Reset refs - only if this done is for our current job
         currentJobIdRef.current = null;
         streamingRef.current = "";
+        displayedRef.current = "";
         sourcesRef.current = [];
         break;
       }
@@ -974,6 +1001,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         // Reset refs
         currentJobIdRef.current = null;
         streamingRef.current = "";
+        displayedRef.current = "";
         sourcesRef.current = [];
         break;
       }
@@ -1066,11 +1094,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     };
   }, [projectId, threadId]);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, isLoading]);
+  // Note: We intentionally don't auto-scroll during streaming
+  // This lets users read at their own pace without scroll hijacking
+  // Scroll only happens once when user sends a message (in handleSubmit)
 
   // Focus input when a question is asked (desktop only)
   useEffect(() => {
@@ -1090,6 +1116,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
     // Reset streaming state
     streamingRef.current = "";
+    displayedRef.current = "";
     sourcesRef.current = [];
     setInput("");
     setTokenCount(0);
@@ -1103,6 +1130,18 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       { id: tempId, role: "user" as const, content: question },
       { id: `assistant-${tempId}`, role: "assistant" as const, content: "", sources: [] }
     ]);
+
+    // Smooth scroll to position user's message at the TOP of the chat viewport
+    // Response will stream below it (like ChatGPT)
+    // The streaming assistant message has min-height to create scroll room
+    // CSS scroll-padding-top on the container automatically accounts for sticky banner
+    setTimeout(() => {
+      const userMessageEl = document.getElementById(`message-${tempId}`);
+      if (userMessageEl) {
+        // scrollIntoView respects scroll-padding-top CSS property
+        userMessageEl.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
+    }, 50);
 
     try {
       // Create job - this saves the user message and enqueues Celery task
@@ -1149,84 +1188,90 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         containerRef={chatContainerRef}
       />
 
-      {/* Context banner for child threads (subthreads) */}
-      {parentThreadId && (
-        <div className="flex-shrink-0 border-b bg-violet-500/5 dark:bg-violet-400/5">
-          <div className="px-4 py-2.5">
-            {/* Breadcrumb navigation */}
-            <div className="flex items-center gap-1 text-xs mb-1.5 overflow-x-auto">
-              {/* Subthread indicator icon */}
-              <svg className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-              </svg>
+      {/* Scrollable messages area - banner is sticky INSIDE for proper scroll behavior */}
+      <div
+        className="flex-1 overflow-y-auto chat-scrollbar"
+        ref={scrollRef}
+        style={{ scrollPaddingTop: parentThreadId ? '80px' : '16px' }}
+      >
+        {/* Sticky context banner for child threads (subthreads) */}
+        {parentThreadId && (
+          <div id="subthread-banner" className="sticky top-0 z-10 border-b bg-violet-500/5 dark:bg-violet-400/5 backdrop-blur-sm bg-background/80">
+            <div className="px-4 py-2.5">
+              {/* Breadcrumb navigation */}
+              <div className="flex items-center gap-1 text-xs mb-1.5 overflow-x-auto">
+                {/* Subthread indicator icon */}
+                <svg className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
 
-              {/* Ancestor breadcrumbs */}
-              {onNavigateToThread && ancestorThreads.length > 0 ? (
-                <>
-                  {ancestorThreads.map((ancestor, i) => (
-                    <span key={ancestor.id} className="flex items-center gap-1 flex-shrink-0">
-                      {i > 0 && <span className="text-muted-foreground/50">›</span>}
-                      <button
-                        onClick={() => onNavigateToThread({
-                          id: ancestor.id,
+                {/* Ancestor breadcrumbs */}
+                {onNavigateToThread && ancestorThreads.length > 0 ? (
+                  <>
+                    {ancestorThreads.map((ancestor, i) => (
+                      <span key={ancestor.id} className="flex items-center gap-1 flex-shrink-0">
+                        {i > 0 && <span className="text-muted-foreground/50">›</span>}
+                        <button
+                          onClick={() => onNavigateToThread({
+                            id: ancestor.id,
+                            project_id: projectId,
+                            title: ancestor.title,
+                            created_at: "",
+                            updated_at: "",
+                            parent_thread_id: null,
+                            context_text: null,
+                            child_count: 0,
+                          } as Thread)}
+                          className="text-muted-foreground hover:text-foreground transition-colors truncate max-w-[120px]"
+                          title={ancestor.title}
+                        >
+                          {ancestor.title}
+                        </button>
+                      </span>
+                    ))}
+                    <span className="text-muted-foreground/50 flex-shrink-0">›</span>
+                    <span className="text-violet-600 dark:text-violet-400 font-medium flex-shrink-0">Current</span>
+                  </>
+                ) : onNavigateToThread ? (
+                  /* Fallback when no ancestor chain is available - just show back link */
+                  <>
+                    <button
+                      onClick={() => {
+                        onNavigateToThread({
+                          id: parentThreadId,
                           project_id: projectId,
-                          title: ancestor.title,
+                          title: "",
                           created_at: "",
                           updated_at: "",
                           parent_thread_id: null,
                           context_text: null,
                           child_count: 0,
-                        } as Thread)}
-                        className="text-muted-foreground hover:text-foreground transition-colors truncate max-w-[120px]"
-                        title={ancestor.title}
-                      >
-                        {ancestor.title}
-                      </button>
-                    </span>
-                  ))}
-                  <span className="text-muted-foreground/50 flex-shrink-0">›</span>
-                  <span className="text-violet-600 dark:text-violet-400 font-medium flex-shrink-0">Current</span>
-                </>
-              ) : onNavigateToThread ? (
-                /* Fallback when no ancestor chain is available - just show back link */
-                <>
-                  <button
-                    onClick={() => {
-                      onNavigateToThread({
-                        id: parentThreadId,
-                        project_id: projectId,
-                        title: "",
-                        created_at: "",
-                        updated_at: "",
-                        parent_thread_id: null,
-                        context_text: null,
-                        child_count: 0,
-                      } as Thread);
-                    }}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Parent thread
-                  </button>
-                  <span className="text-muted-foreground/50">›</span>
-                  <span className="text-violet-600 dark:text-violet-400 font-medium">Current</span>
-                </>
-              ) : (
-                <span className="text-violet-600 dark:text-violet-400 font-medium">Deep Dive</span>
+                        } as Thread);
+                      }}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Parent thread
+                    </button>
+                    <span className="text-muted-foreground/50">›</span>
+                    <span className="text-violet-600 dark:text-violet-400 font-medium">Current</span>
+                  </>
+                ) : (
+                  <span className="text-violet-600 dark:text-violet-400 font-medium">Deep Dive</span>
+                )}
+              </div>
+
+              {/* Context text - what the user is exploring */}
+              {contextText && (
+                <div className="text-sm text-foreground/80 italic line-clamp-2 pl-5 border-l-2 border-violet-500/30 dark:border-violet-400/30">
+                  "{contextText}"
+                </div>
               )}
             </div>
-
-            {/* Context text - what the user is exploring */}
-            {contextText && (
-              <div className="text-sm text-foreground/80 italic line-clamp-2 pl-5 border-l-2 border-violet-500/30 dark:border-violet-400/30">
-                "{contextText}"
-              </div>
-            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Scrollable messages area */}
-      <div className="flex-1 overflow-y-auto p-3 md:p-4 chat-scrollbar" ref={scrollRef}>
+        {/* Messages container with padding */}
+        <div className="p-3 md:p-4">
         <div className="space-y-3 md:space-y-4 pb-4">
           {!messagesLoaded ? (
             // Show loading state while messages are being fetched
@@ -1239,10 +1284,17 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               <p className="text-sm">Upload some documents and ask a question!</p>
             </div>
           ) : (
-            messages.map((message) => (
+            messages.map((message, index) => {
+              // Give the last assistant message min-height to allow scrolling user message to top
+              // Keep it even after streaming to avoid layout shift
+              const isLastAssistant = message.role === "assistant" && index === messages.length - 1;
+
+              return (
               <div
                 key={message.id}
+                id={`message-${message.id}`}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                style={isLastAssistant ? { minHeight: 'calc(100vh - 200px)' } : undefined}
               >
                 <div
                   className={`max-w-[90%] md:max-w-3xl rounded-lg px-3 md:px-4 py-2 ${
@@ -1476,8 +1528,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                   </div>
                 </div>
               </div>
-            ))
+            );})
           )}
+        </div>
         </div>
       </div>
 

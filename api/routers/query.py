@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
-from api.database import get_db, Project, Thread, Message, User
+from api.database import get_db, Project, Thread, Message, User, Resource, ProjectResource
 from api.schemas import QueryRequest, QueryResponse, SourceInfo, SemanticSearchRequest, SemanticSearchResponse, SemanticSearchResult
 from api.middleware.auth import get_current_user
 from rag.embeddings import Embedder
@@ -29,7 +29,7 @@ _resource_cache: dict[str, tuple[list[ResourceInfo], float]] = {}
 _resource_cache_ttl = 60  # seconds
 
 
-def _get_resources_cached(project_id: str, project) -> list[ResourceInfo]:
+def _get_resources_cached(db: Session, project_id: str) -> list[ResourceInfo]:
     """Get resources with 60-second cache to avoid DB round-trips."""
     global _resource_cache
     now = time.time()
@@ -40,8 +40,8 @@ def _get_resources_cached(project_id: str, project) -> list[ResourceInfo]:
         if now - timestamp < _resource_cache_ttl:
             return cached_resources
 
-    # Fetch fresh
-    resources = _build_resources_list(project)
+    # Fetch fresh using explicit query
+    resources = _build_resources_list(db, project_id)
     _resource_cache[cache_key] = (resources, now)
     return resources
 
@@ -75,24 +75,34 @@ def get_agent(version: Optional[str] = None):
     return Agent(retriever=retriever, api_key=anthropic_key, tavily_api_key=tavily_key, version=version)
 
 
-def _build_resources_list(project) -> list[ResourceInfo]:
+def _build_resources_list(db: Session, project_id: str) -> list[ResourceInfo]:
     """Build a list of ResourceInfo from project resources with metadata.
+
+    Uses explicit query to ensure fresh data from database, avoiding stale
+    lazy-loaded relationships.
 
     Includes all resources except failed ones, so the agent can see files
     that are still processing (uploaded, extracting, indexing, etc.).
     """
-    import json
-    import os
+    import json as json_lib
+    import os as os_lib
+
+    # Explicitly query resources via ProjectResource join to ensure fresh data
+    db_resources = db.query(Resource).join(
+        ProjectResource, ProjectResource.resource_id == Resource.id
+    ).filter(
+        ProjectResource.project_id == project_id
+    ).all()
 
     resources = []
-    for r in project.resources:
+    for r in db_resources:
         # Skip only failed resources - show everything else including processing
         if r.status.value == "failed":
             continue
 
         # For data files and images, verify the file actually exists
         if r.type.value in ("data_file", "image"):
-            if not r.source or not os.path.exists(r.source):
+            if not r.source or not os_lib.path.exists(r.source):
                 continue
         resource_info = ResourceInfo(
             name=r.filename or r.source,
@@ -110,7 +120,7 @@ def _build_resources_list(project) -> list[ResourceInfo]:
                 resource_info.row_count = dm.row_count
                 if dm.columns_json:
                     try:
-                        columns = json.loads(dm.columns_json)
+                        columns = json_lib.loads(dm.columns_json)
                         resource_info.columns = [c.get("name", "") for c in columns]
                     except:
                         pass
@@ -126,15 +136,25 @@ def _build_resources_list(project) -> list[ResourceInfo]:
     return resources
 
 
-def _get_resource_namespaces(project) -> list[str]:
+def _get_resource_namespaces(db: Session, project_id: str) -> list[str]:
     """Get unique namespaces from project resources.
+
+    Uses explicit query to ensure fresh data from database, avoiding stale
+    lazy-loaded relationships.
 
     With the global resource model, each resource has its own namespace
     (resource_id). This handles backward compatibility for old resources
     that may have been indexed with workspace/project IDs.
     """
+    # Explicitly query resources via ProjectResource join to ensure fresh data
+    db_resources = db.query(Resource).join(
+        ProjectResource, ProjectResource.resource_id == Resource.id
+    ).filter(
+        ProjectResource.project_id == project_id
+    ).all()
+
     namespaces = set()
-    for r in project.resources:
+    for r in db_resources:
         if r.status.value == "ready":  # Only include indexed resources
             if r.pinecone_namespace:
                 # Use the stored namespace (resource_id for new resources)
@@ -248,7 +268,7 @@ def query_thread(
     agent = get_agent()
 
     # V4 Feature: Use cached resources to avoid DB round-trips
-    resources = _get_resources_cached(project_id, project)
+    resources = _get_resources_cached(db, project_id)
 
     # Check what types of resources exist
     has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
@@ -263,7 +283,7 @@ def query_thread(
     ]
 
     # Get namespaces from project resources
-    namespaces = _get_resource_namespaces(project)
+    namespaces = _get_resource_namespaces(db, project.id)
 
     # Build parent thread context for subthreads
     parent_context = _build_parent_context(thread, db)
@@ -347,7 +367,7 @@ def query_thread_stream(
     agent = get_agent(version=agent_version)
 
     # V4 Feature: Use cached resources to avoid DB round-trips
-    resources = _get_resources_cached(project_id, project)
+    resources = _get_resources_cached(db, project_id)
 
     # Check what types of resources exist
     has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
@@ -366,7 +386,7 @@ def query_thread_stream(
     db.commit()
 
     # Get namespaces from project resources
-    namespaces = _get_resource_namespaces(project)
+    namespaces = _get_resource_namespaces(db, project.id)
 
     # Build parent thread context for subthreads
     parent_context = _build_parent_context(thread, db)
@@ -548,7 +568,7 @@ def semantic_search(
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Get namespaces from project resources
-    namespaces = _get_resource_namespaces(project)
+    namespaces = _get_resource_namespaces(db, project.id)
 
     if not namespaces:
         return SemanticSearchResponse(results=[], query=request.query)
