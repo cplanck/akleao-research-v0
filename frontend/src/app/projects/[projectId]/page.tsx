@@ -512,6 +512,7 @@ export default function ProjectPage() {
     const thread = await handleCreateThread();
     if (thread && selectedProject) {
       router.push(`/projects/${selectedProject.id}/threads/${thread.id}`);
+      setThreadSheetOpen(false); // Close sidebar on mobile
     }
   };
 
@@ -627,6 +628,31 @@ export default function ProjectPage() {
           </span>
 
           <div className="flex items-center gap-1">
+            {/* New thread button */}
+            {selectedProject && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0"
+                onClick={handleCreateThreadAndNavigate}
+                title="New Thread"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              </Button>
+            )}
             <Sheet open={resourceSheetOpen} onOpenChange={setResourceSheetOpen}>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-9 w-9 p-0 relative">
