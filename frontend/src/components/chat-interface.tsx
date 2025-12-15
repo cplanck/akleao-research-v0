@@ -1131,44 +1131,17 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       { id: `assistant-${tempId}`, role: "assistant" as const, content: "", sources: [] }
     ]);
 
-    // Smooth scroll to position user's message just below the sticky banner
+    // Scroll user's message to top of viewport (like ChatGPT/Claude)
+    // The scroll-margin-top CSS on message elements handles the sticky banner offset
     setTimeout(() => {
-      requestAnimationFrame(() => {
-        const userMessageEl = document.getElementById(`message-${tempId}`);
-        const scrollContainer = scrollRef.current;
-        const banner = document.getElementById("subthread-banner");
-
-        if (userMessageEl && scrollContainer) {
-          const bannerHeight = banner ? banner.offsetHeight : 0;
-          const padding = bannerHeight > 0 ? 8 : 16;
-
-          // Get the message's position within the scroll content
-          const messageRect = userMessageEl.getBoundingClientRect();
-          const containerRect = scrollContainer.getBoundingClientRect();
-
-          // Where is the message relative to the scroll container's current view?
-          const messageVisualTop = messageRect.top - containerRect.top;
-
-          // We want the message at (bannerHeight + padding) from container top
-          // So we need to scroll by the difference
-          const scrollBy = messageVisualTop - bannerHeight - padding;
-
-          console.log('[SCROLL DEBUG]', {
-            bannerHeight,
-            padding,
-            messageVisualTop,
-            scrollBy,
-            currentScrollTop: scrollContainer.scrollTop,
-            newScrollTop: scrollContainer.scrollTop + scrollBy
-          });
-
-          scrollContainer.scrollTo({
-            top: scrollContainer.scrollTop + scrollBy,
-            behavior: "smooth"
-          });
-        }
-      });
-    }, 100);
+      const userMessageEl = document.getElementById(`message-${tempId}`);
+      if (userMessageEl) {
+        userMessageEl.scrollIntoView({
+          block: 'start',
+          behavior: 'smooth'
+        });
+      }
+    }, 50);
 
     try {
       // Create job - this saves the user message and enqueues Celery task
@@ -1316,12 +1289,19 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               // Keep it even after streaming to avoid layout shift
               const isLastAssistant = message.role === "assistant" && index === messages.length - 1;
 
+              // scroll-margin-top tells browser to add space when using scrollIntoView
+              // This ensures messages scroll to below the sticky banner in subthreads
+              const scrollMargin = parentThreadId ? '80px' : '16px';
+
               return (
               <div
                 key={message.id}
                 id={`message-${message.id}`}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                style={isLastAssistant ? { minHeight: 'calc(100vh - 200px)' } : undefined}
+                style={{
+                  ...(isLastAssistant ? { minHeight: 'calc(100vh - 200px)' } : {}),
+                  scrollMarginTop: scrollMargin
+                }}
               >
                 <div
                   className={`max-w-[90%] md:max-w-3xl rounded-lg px-3 md:px-4 py-2 ${
