@@ -557,6 +557,7 @@ function useIsMobile(breakpoint: number = 768) {
 // Custom hook to detect keyboard height using Visual Viewport API
 function useKeyboardHeight() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const initialHeightRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Only run on client and if visualViewport is supported
@@ -566,11 +567,23 @@ function useKeyboardHeight() {
 
     const viewport = window.visualViewport;
 
+    // Capture initial height on mount (before keyboard opens)
+    // This is our reference for "full screen" height
+    if (initialHeightRef.current === null) {
+      initialHeightRef.current = viewport.height;
+    }
+
     const handleResize = () => {
-      // Calculate keyboard height as difference between window height and visual viewport
-      const windowHeight = window.innerHeight;
       const viewportHeight = viewport.height;
-      const newKeyboardHeight = Math.max(0, windowHeight - viewportHeight);
+
+      // Update initial height if viewport gets larger (e.g., after rotation or keyboard close)
+      // This handles orientation changes
+      if (viewportHeight > (initialHeightRef.current || 0)) {
+        initialHeightRef.current = viewportHeight;
+      }
+
+      // Calculate keyboard height as difference from initial/max height
+      const newKeyboardHeight = Math.max(0, (initialHeightRef.current || 0) - viewportHeight);
 
       // Only consider it a keyboard if it's substantial (> 100px)
       // This avoids false positives from browser chrome changes
