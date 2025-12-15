@@ -482,7 +482,7 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
       );
     },
     p({ children }) {
-      return <p className="mb-2 last:mb-0">{children}</p>;
+      return <p className="mb-3 last:mb-0">{children}</p>;
     },
     ul({ children }) {
       return <ul className="list-disc pl-4 mb-2">{children}</ul>;
@@ -532,7 +532,7 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
   };
 
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none">
+    <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
         {displayContent}
       </ReactMarkdown>
