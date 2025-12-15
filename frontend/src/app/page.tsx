@@ -15,6 +15,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { UserAvatar } from "@/components/user-avatar";
 import { Project, listProjects, createProject, deleteProject, createThread } from "@/lib/api";
 import Link from "next/link";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 // Folder icon component
 function FolderIcon({ className }: { className?: string }) {
@@ -171,11 +172,7 @@ export default function Home() {
   };
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <LoadingSpinner fullScreen size="lg" />;
   }
 
   return (

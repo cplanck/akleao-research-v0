@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/theme-toggle";
 import Link from "next/link";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 function ArrowLeftIcon({ className }: { className?: string }) {
   return (
@@ -64,11 +65,7 @@ export default function SettingsPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <LoadingSpinner fullScreen size="lg" />;
   }
 
   if (!user) {

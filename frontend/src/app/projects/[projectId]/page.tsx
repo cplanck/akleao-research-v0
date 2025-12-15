@@ -39,6 +39,7 @@ import Link from "next/link";
 import { useProject } from "@/contexts/project-context";
 import { Thread } from "@/lib/api";
 import { NotificationBell } from "@/components/notification-bell";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 // Custom hook to detect mobile screens
 function useIsMobile(breakpoint: number = 768) {
@@ -557,11 +558,7 @@ export default function ProjectPage() {
 
   // Show loading until both projects list and specific project are loaded
   if (projectsLoading || projectDetailLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <LoadingSpinner fullScreen size="lg" />;
   }
 
   // Mobile layout
