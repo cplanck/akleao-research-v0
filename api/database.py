@@ -860,6 +860,39 @@ def _run_incremental_migrations():
                     conn.execute(text("ALTER TABLE projects ADD COLUMN user_id VARCHAR REFERENCES users(id)"))
                     print("[Migration] Added user_id column to projects")
 
+            # Migration 19: Add 3-stage upload columns to resources
+            if "resources" in existing_tables:
+                # Refresh columns list
+                columns = [col["name"] for col in inspector.get_columns("resources")]
+
+                if "error_stage" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN error_stage VARCHAR"))
+                    print("[Migration] Added error_stage column to resources")
+
+                if "mime_type" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN mime_type VARCHAR"))
+                    print("[Migration] Added mime_type column to resources")
+
+                if "storage_backend" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN storage_backend VARCHAR DEFAULT 'local'"))
+                    print("[Migration] Added storage_backend column to resources")
+
+                if "extracted_at" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN extracted_at DATETIME"))
+                    print("[Migration] Added extracted_at column to resources")
+
+                if "extraction_duration_ms" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN extraction_duration_ms INTEGER"))
+                    print("[Migration] Added extraction_duration_ms column to resources")
+
+                if "extraction_metadata" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN extraction_metadata TEXT"))
+                    print("[Migration] Added extraction_metadata column to resources")
+
+                if "chunk_count" not in columns:
+                    conn.execute(text("ALTER TABLE resources ADD COLUMN chunk_count INTEGER"))
+                    print("[Migration] Added chunk_count column to resources")
+
             trans.commit()
         except Exception as e:
             trans.rollback()
