@@ -1192,7 +1192,6 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       <div
         className="flex-1 overflow-y-auto chat-scrollbar"
         ref={scrollRef}
-        style={{ scrollPaddingTop: parentThreadId ? '80px' : '16px' }}
       >
         {/* Sticky context banner for child threads (subthreads) */}
         {parentThreadId && (
