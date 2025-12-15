@@ -823,6 +823,25 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     subscribeToThread(projectId, threadId);
   }, [projectId, threadId, subscribeToThread, transformMessages]);
 
+  // Scroll to bottom when thread is first loaded (standard chat behavior)
+  const hasScrolledToBottomRef = useRef(false);
+  useEffect(() => {
+    if (messagesLoaded && messages.length > 0 && !hasScrolledToBottomRef.current) {
+      hasScrolledToBottomRef.current = true;
+      // Small delay to ensure DOM is rendered
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  }, [messagesLoaded, messages.length]);
+
+  // Reset scroll flag when thread changes
+  useEffect(() => {
+    hasScrolledToBottomRef.current = false;
+  }, [threadId]);
+
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
   useEffect(() => {
@@ -1132,14 +1151,23 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     ]);
 
     // Scroll user's message to top of viewport (like ChatGPT/Claude)
-    // The scroll-margin-top CSS on message elements handles the sticky banner offset
+    // Two-step: scrollIntoView first, then adjust for sticky banner
     setTimeout(() => {
       const userMessageEl = document.getElementById(`message-${tempId}`);
-      if (userMessageEl) {
-        userMessageEl.scrollIntoView({
-          block: 'start',
-          behavior: 'smooth'
-        });
+      const scrollContainer = scrollRef.current;
+      const banner = document.getElementById('subthread-banner');
+
+      if (userMessageEl && scrollContainer) {
+        // Step 1: Scroll message to very top (will be behind banner if in subthread)
+        userMessageEl.scrollIntoView({ block: 'start', behavior: 'instant' });
+
+        // Step 2: If there's a sticky banner, scroll UP to push message below it
+        if (banner) {
+          const bannerHeight = banner.offsetHeight;
+          const padding = 12;
+          // Scrolling UP (decreasing scrollTop) pushes content DOWN
+          scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - bannerHeight - padding);
+        }
       }
     }, 50);
 
@@ -1284,13 +1312,16 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
             </div>
           ) : (
             messages.map((message, index) => {
-              // Give the last assistant message min-height to allow scrolling user message to top
-              // Keep it even after streaming to avoid layout shift
-              const isLastAssistant = message.role === "assistant" && index === messages.length - 1;
+              // Give the last assistant message min-height ONLY during active streaming
+              // This creates scroll room so user's message can scroll to top
+              // Don't apply on existing threads (would show excessive padding)
+              const isActiveStreamingMessage =
+                message.role === "assistant" &&
+                index === messages.length - 1 &&
+                isLoading;
 
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
-              // Using generous values to ensure previous messages are pushed off-screen
               const scrollMargin = parentThreadId ? '100px' : '24px';
 
               return (
@@ -1299,7 +1330,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                 id={`message-${message.id}`}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
                 style={{
-                  ...(isLastAssistant ? { minHeight: 'calc(100vh - 200px)' } : {}),
+                  ...(isActiveStreamingMessage ? { minHeight: 'calc(100vh - 200px)' } : {}),
                   scrollMarginTop: scrollMargin
                 }}
               >
