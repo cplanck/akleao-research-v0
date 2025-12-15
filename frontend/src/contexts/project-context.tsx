@@ -215,10 +215,10 @@ export function ProjectProvider({
       child_count: 0,
     };
 
-    // Add to UI immediately
+    // Add to UI immediately (at end to match server sort order)
     setSelectedProject({
       ...selectedProject,
-      threads: [tempThread, ...selectedProject.threads],
+      threads: [...selectedProject.threads, tempThread],
     });
     setSelectedThread(tempThread);
 
@@ -313,9 +313,10 @@ export function ProjectProvider({
     if (!selectedProject) return;
     const existingThread = selectedProject.threads.find(t => t.id === thread.id);
     if (!existingThread) {
+      // Add at end to match server sort order
       setSelectedProject({
         ...selectedProject,
-        threads: [thread, ...selectedProject.threads],
+        threads: [...selectedProject.threads, thread],
       });
     }
     setSelectedThread(thread);
