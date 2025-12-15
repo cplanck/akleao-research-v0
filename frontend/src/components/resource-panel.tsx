@@ -97,12 +97,30 @@ interface ResourcePanelProps {
   onRefresh: () => void;
 }
 
-const statusColors: Record<Resource["status"], string> = {
-  pending: "bg-yellow-500",
-  indexing: "",
-  ready: "bg-green-500",
-  failed: "bg-red-500",
-};
+// Helper functions for status normalization
+function isReadyStatus(status: string): boolean {
+  return ["ready", "indexed", "analyzed", "described"].includes(status.toLowerCase());
+}
+
+function isProcessingStatus(status: string): boolean {
+  return ["pending", "uploaded", "extracting", "extracted", "stored", "indexing"].includes(status.toLowerCase());
+}
+
+function isFailedStatus(status: string): boolean {
+  return status.toLowerCase() === "failed";
+}
+
+function isPartialStatus(status: string): boolean {
+  return status.toLowerCase() === "partial";
+}
+
+function getStatusColor(status: string): string {
+  if (isReadyStatus(status)) return "bg-green-500";
+  if (isPartialStatus(status)) return "bg-yellow-500";
+  if (isFailedStatus(status)) return "bg-red-500";
+  if (isProcessingStatus(status)) return "bg-blue-500";
+  return "bg-gray-500";
+}
 
 function Spinner({ className }: { className?: string }) {
   return (
@@ -555,12 +573,14 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
             if (currentProjectIdRef.current !== originalWorkspaceId) return;
             onRefresh();
 
-            if (updated.status === "ready") {
+            if (isReadyStatus(updated.status)) {
               const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
               toast.success(`Indexed "${resourceName}"${duration}`);
-            } else if (updated.status === "failed") {
+            } else if (isPartialStatus(updated.status)) {
+              toast.success(`Uploaded "${resourceName}" (partial - enrichment skipped)`);
+            } else if (isFailedStatus(updated.status)) {
               toast.error(`Failed to index "${resourceName}"`);
-            } else if (updated.status === "indexing" || updated.status === "pending") {
+            } else if (isProcessingStatus(updated.status)) {
               setTimeout(checkStatus, 2000);
             }
           } catch (error) {
@@ -609,12 +629,14 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
           if (currentProjectIdRef.current !== originalWorkspaceId) return;
           onRefresh();
 
-          if (updated.status === "ready") {
+          if (isReadyStatus(updated.status)) {
             const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
             toast.success(`Indexed "${resourceName}"${duration}`);
-          } else if (updated.status === "failed") {
+          } else if (isPartialStatus(updated.status)) {
+            toast.success(`Added "${resourceName}" (partial - enrichment skipped)`);
+          } else if (isFailedStatus(updated.status)) {
             toast.error(`Failed to index "${resourceName}"`);
-          } else if (updated.status === "indexing" || updated.status === "pending") {
+          } else if (isProcessingStatus(updated.status)) {
             setTimeout(checkStatus, 2000);
           }
         } catch (error) {
@@ -668,12 +690,14 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
           if (currentProjectIdRef.current !== originalWorkspaceId) return;
           onRefresh();
 
-          if (updated.status === "ready") {
+          if (isReadyStatus(updated.status)) {
             const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
             toast.success(`Indexed "${resourceName}"${duration}`);
-          } else if (updated.status === "failed") {
+          } else if (isPartialStatus(updated.status)) {
+            toast.success(`Added "${resourceName}" (partial - enrichment skipped)`);
+          } else if (isFailedStatus(updated.status)) {
             toast.error(`Failed to index "${resourceName}": ${updated.error_message || "Unknown error"}`);
-          } else if (updated.status === "indexing" || updated.status === "pending") {
+          } else if (isProcessingStatus(updated.status)) {
             setTimeout(checkStatus, 3000); // Git repos take longer, poll less frequently
           }
         } catch (error) {
@@ -774,12 +798,14 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
           if (currentProjectIdRef.current !== originalWorkspaceId) return;
           onRefresh();
 
-          if (updated.status === "ready") {
+          if (isReadyStatus(updated.status)) {
             const duration = updated.indexing_duration_ms ? ` in ${formatDuration(updated.indexing_duration_ms)}` : "";
             toast.success(`Reindexed "${resourceName}"${duration}`);
-          } else if (updated.status === "failed") {
+          } else if (isPartialStatus(updated.status)) {
+            toast.success(`Reprocessed "${resourceName}" (partial - enrichment skipped)`);
+          } else if (isFailedStatus(updated.status)) {
             toast.error(`Failed to reindex "${resourceName}"`);
-          } else if (updated.status === "indexing" || updated.status === "pending") {
+          } else if (isProcessingStatus(updated.status)) {
             // Still processing, check again in 2 seconds
             setTimeout(checkStatus, 2000);
           }
@@ -853,9 +879,9 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
             )}
             {resources.map((resource) => {
                 const isExpanded = expandedResources.has(resource.id);
-                const canReindex = resource.status === "ready" || resource.status === "failed";
-                const isProcessing = resource.status === "indexing" || resource.status === "pending";
-                const isReady = resource.status === "ready";
+                const canReindex = isReadyStatus(resource.status) || isFailedStatus(resource.status) || isPartialStatus(resource.status);
+                const isProcessing = isProcessingStatus(resource.status);
+                const isReady = isReadyStatus(resource.status) || isPartialStatus(resource.status);
 
                 return (
                   <div key={resource.id} className="rounded-md bg-muted/50 overflow-hidden">
@@ -871,7 +897,7 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
                       {isProcessing ? (
                         <Spinner className="w-3 h-3 flex-shrink-0 mr-2 text-blue-500" />
                       ) : (
-                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mr-2 ${statusColors[resource.status]}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mr-2 ${getStatusColor(resource.status)}`} />
                       )}
                       {/* Resource type icon */}
                       <ResourceTypeIcon type={resource.type} className="w-3.5 h-3.5 flex-shrink-0 mr-1.5 text-muted-foreground" />

@@ -25,30 +25,31 @@ load_dotenv()
 # ============================================================================
 # V4 Feature: Resource Cache with TTL
 # ============================================================================
-_resource_cache: dict[int, tuple[list[ResourceInfo], float]] = {}
+_resource_cache: dict[str, tuple[list[ResourceInfo], float]] = {}
 _resource_cache_ttl = 60  # seconds
 
 
-def _get_resources_cached(project_id: int, project) -> list[ResourceInfo]:
+def _get_resources_cached(project_id: str, project) -> list[ResourceInfo]:
     """Get resources with 60-second cache to avoid DB round-trips."""
     global _resource_cache
     now = time.time()
 
-    if project_id in _resource_cache:
-        cached_resources, timestamp = _resource_cache[project_id]
+    cache_key = str(project_id)
+    if cache_key in _resource_cache:
+        cached_resources, timestamp = _resource_cache[cache_key]
         if now - timestamp < _resource_cache_ttl:
             return cached_resources
 
     # Fetch fresh
     resources = _build_resources_list(project)
-    _resource_cache[project_id] = (resources, now)
+    _resource_cache[cache_key] = (resources, now)
     return resources
 
 
-def invalidate_resource_cache(project_id: int):
+def invalidate_resource_cache(project_id: str):
     """Invalidate cache when resources are added/removed/modified."""
     global _resource_cache
-    _resource_cache.pop(project_id, None)
+    _resource_cache.pop(str(project_id), None)
 
 
 def get_agent(version: Optional[str] = None):

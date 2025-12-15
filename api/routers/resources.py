@@ -568,7 +568,7 @@ async def add_resource(
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
         # V4: Invalidate resource cache since project now has new resource
-        invalidate_resource_cache(int(project_id))
+        invalidate_resource_cache(project_id)
         return existing_resource
 
     # Save uploaded file using storage abstraction
@@ -605,7 +605,7 @@ async def add_resource(
 
     db.refresh(resource)
     # V4: Invalidate resource cache since project now has new resource
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
 
@@ -1029,7 +1029,7 @@ async def add_git_resource(
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
         # V4: Invalidate resource cache since project now has new resource
-        invalidate_resource_cache(int(project_id))
+        invalidate_resource_cache(project_id)
         return existing_resource
 
     # Extract repo name for filename
@@ -1059,7 +1059,7 @@ async def add_git_resource(
 
     db.refresh(resource)
     # V4: Invalidate resource cache since project now has new resource
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
 
@@ -1098,7 +1098,7 @@ async def add_url_resource(
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
         # V4: Invalidate resource cache since project now has new resource
-        invalidate_resource_cache(int(project_id))
+        invalidate_resource_cache(project_id)
         return existing_resource
 
     # Extract filename from URL path
@@ -1129,7 +1129,7 @@ async def add_url_resource(
 
     db.refresh(resource)
     # V4: Invalidate resource cache since project now has new resource
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
 
@@ -1296,7 +1296,7 @@ def delete_resource(
     db.commit()
 
     # V4: Invalidate resource cache since project lost a resource
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
 
     # Check if resource is now orphaned (no project links)
     remaining_links = db.query(ProjectResource).filter(
@@ -1399,7 +1399,7 @@ async def reindex_resource(
         )
 
     # V4: Invalidate resource cache since resource status changed to PENDING
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
 
@@ -1528,7 +1528,7 @@ def link_resource_to_project(
     db.refresh(resource)
 
     # V4: Invalidate resource cache since project now has new resource
-    invalidate_resource_cache(int(project_id))
+    invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
 

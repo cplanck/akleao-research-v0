@@ -221,16 +221,53 @@ function getResourceIcon(type: string) {
   }
 }
 
+function normalizeStatus(status: string): { display: string; key: string } {
+  // Map all statuses to user-friendly display values
+  const statusLower = status.toLowerCase();
+
+  // Terminal success states
+  if (["ready", "indexed", "analyzed", "described"].includes(statusLower)) {
+    return { display: "Ready", key: "ready" };
+  }
+
+  // Partial success (usable but enrichment failed)
+  if (statusLower === "partial") {
+    return { display: "Partial", key: "partial" };
+  }
+
+  // Failed state
+  if (statusLower === "failed") {
+    return { display: "Failed", key: "failed" };
+  }
+
+  // All processing states
+  if (["pending", "uploaded", "extracting", "extracted", "stored", "indexing"].includes(statusLower)) {
+    return { display: "Processing", key: "processing" };
+  }
+
+  // Unknown - show as-is
+  return { display: status, key: "unknown" };
+}
+
+function isResourceReady(status: string): boolean {
+  const { key } = normalizeStatus(status);
+  return key === "ready" || key === "partial";
+}
+
 function getStatusBadge(status: string) {
+  const { display, key } = normalizeStatus(status);
+
   const colors: Record<string, string> = {
     ready: "bg-green-500/10 text-green-600 dark:text-green-400",
-    pending: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
-    indexing: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    processing: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    partial: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
     failed: "bg-red-500/10 text-red-600 dark:text-red-400",
+    unknown: "bg-gray-500/10 text-gray-600",
   };
+
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || "bg-gray-500/10 text-gray-600"}`}>
-      {status}
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[key]}`}>
+      {display}
     </span>
   );
 }
@@ -677,7 +714,7 @@ export default function LibraryPage() {
                 <TabsTrigger value="projects">
                   Projects ({selectedResource.projects.length})
                 </TabsTrigger>
-                <TabsTrigger value="chunks" disabled={selectedResource.status !== "ready"}>
+                <TabsTrigger value="chunks" disabled={!isResourceReady(selectedResource.status)}>
                   Chunks
                 </TabsTrigger>
               </TabsList>
