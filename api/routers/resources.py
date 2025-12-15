@@ -15,6 +15,7 @@ from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCrea
 from api.utils.hashing import compute_content_hash, compute_url_hash, compute_git_hash
 from api.utils.file_types import detect_file_category, get_resource_type, is_allowed_extension, FileCategory, format_allowed_extensions
 from api.storage import get_storage
+from api.routers.query import invalidate_resource_cache
 from rag import RAGPipeline
 
 router = APIRouter(prefix="/projects/{project_id}/resources", tags=["resources"])
@@ -566,6 +567,8 @@ async def add_resource(
         # Resource already exists and is indexed - just link to this project
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
+        # V4: Invalidate resource cache since project now has new resource
+        invalidate_resource_cache(int(project_id))
         return existing_resource
 
     # Save uploaded file using storage abstraction
@@ -601,6 +604,8 @@ async def add_resource(
     )
 
     db.refresh(resource)
+    # V4: Invalidate resource cache since project now has new resource
+    invalidate_resource_cache(int(project_id))
     return resource_to_response(resource)
 
 
@@ -1023,6 +1028,8 @@ async def add_git_resource(
         # Resource already exists and is indexed - just link to this project
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
+        # V4: Invalidate resource cache since project now has new resource
+        invalidate_resource_cache(int(project_id))
         return existing_resource
 
     # Extract repo name for filename
@@ -1051,6 +1058,8 @@ async def add_git_resource(
     )
 
     db.refresh(resource)
+    # V4: Invalidate resource cache since project now has new resource
+    invalidate_resource_cache(int(project_id))
     return resource_to_response(resource)
 
 
@@ -1088,6 +1097,8 @@ async def add_url_resource(
         # Resource already exists and is indexed - just link to this project
         _link_resource_to_project(db, existing_resource, project_id)
         db.refresh(existing_resource)
+        # V4: Invalidate resource cache since project now has new resource
+        invalidate_resource_cache(int(project_id))
         return existing_resource
 
     # Extract filename from URL path
@@ -1117,6 +1128,8 @@ async def add_url_resource(
     background_tasks.add_task(index_url, resource.id, request.url)
 
     db.refresh(resource)
+    # V4: Invalidate resource cache since project now has new resource
+    invalidate_resource_cache(int(project_id))
     return resource_to_response(resource)
 
 
@@ -1282,6 +1295,9 @@ def delete_resource(
     db.delete(link)
     db.commit()
 
+    # V4: Invalidate resource cache since project lost a resource
+    invalidate_resource_cache(int(project_id))
+
     # Check if resource is now orphaned (no project links)
     remaining_links = db.query(ProjectResource).filter(
         ProjectResource.resource_id == resource_id
@@ -1382,6 +1398,8 @@ async def reindex_resource(
             None  # Use default branch on reindex
         )
 
+    # V4: Invalidate resource cache since resource status changed to PENDING
+    invalidate_resource_cache(int(project_id))
     return resource_to_response(resource)
 
 
@@ -1509,6 +1527,8 @@ def link_resource_to_project(
     db.commit()
     db.refresh(resource)
 
+    # V4: Invalidate resource cache since project now has new resource
+    invalidate_resource_cache(int(project_id))
     return resource_to_response(resource)
 
 

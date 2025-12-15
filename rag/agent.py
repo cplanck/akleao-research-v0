@@ -106,6 +106,69 @@ DEEP_THINKING_PATTERNS = [
 ]
 
 
+# ============================================================================
+# V4 Feature: Regex Pre-Router for Instant Responses
+# ============================================================================
+# Patterns that can be handled instantly without LLM routing
+INSTANT_PATTERNS = {
+    # Social - instant response, no tools needed
+    "social": [
+        (r"^(hi|hello|hey|howdy)[\s!.?]*$", "Hi! How can I help you with your research today?"),
+        (r"^(thanks|thank you|thx|ty)[\s!.?]*$", "You're welcome! Let me know if you need anything else."),
+        (r"^(bye|goodbye|see ya|later|take care)[\s!.?]*$", "Goodbye! Feel free to come back anytime."),
+        (r"^(ok|okay|cool|great|perfect|awesome|nice|got it|understood)[\s!.?]*$", "Great! What would you like to explore next?"),
+    ],
+    # Resource queries - trigger list_resources tool directly
+    "resource_query": [
+        r"^what (files|documents|resources|data) do i have",
+        r"^(show|list) (my |me )?(files|documents|resources|uploads)",
+        r"^what('s| is) in my (workspace|project)",
+        r"^what (do i have|have i) (uploaded|added)",
+    ],
+}
+
+
+def pre_route(message: str) -> RequestPlanV3 | None:
+    """Instant routing for obvious patterns. Returns None if LLM routing needed.
+
+    This saves ~300ms by skipping the Haiku router call for simple queries.
+    """
+    msg_lower = message.lower().strip()
+
+    for category, patterns in INSTANT_PATTERNS.items():
+        for pattern in patterns:
+            if isinstance(pattern, tuple):
+                # Pattern with direct response
+                regex, response = pattern
+                if re.match(regex, msg_lower, re.IGNORECASE):
+                    return RequestPlanV3(
+                        category=category,
+                        acknowledgment="",
+                        thinking_budget=0,
+                        search_strategy="none",
+                        complexity="instant",
+                        needs_tools=False,
+                        direct_response=response,
+                        intent_mode="action",
+                        response_style="conversational"
+                    )
+            else:
+                # Pattern that triggers a specific tool
+                if re.match(pattern, msg_lower, re.IGNORECASE):
+                    return RequestPlanV3(
+                        category=category,
+                        acknowledgment="",
+                        thinking_budget=0,
+                        search_strategy="none" if category != "resource_query" else "docs",
+                        complexity="simple",
+                        needs_tools=(category == "resource_query"),
+                        intent_mode="action",
+                        response_style="structured"
+                    )
+
+    return None  # Fall through to LLM router
+
+
 def analyze_query_complexity(
     message: str,
     base_budget: int = 4096,
@@ -145,6 +208,37 @@ def analyze_query_complexity(
         budget_tokens=base_budget,
         reason="normal_query"
     )
+
+
+# ============================================================================
+# V4 Feature: Adaptive System Prompt Style Instructions
+# ============================================================================
+STYLE_INSTRUCTIONS = {
+    "conversational": """
+## Response Style: Conversational
+- Be warm and engaging, like a helpful research partner
+- Offer 2-3 follow-up directions the user might explore
+- Ask clarifying questions when appropriate
+- Use natural language, avoid excessive bullet points for simple responses
+- End with an invitation to continue: "Want me to dig deeper into any of these?"
+""",
+    "structured": """
+## Response Style: Structured
+- Be direct and efficient
+- Use markdown formatting: headers, bullets, tables where appropriate
+- Lead with the key finding/answer
+- Organize information hierarchically
+- Include specific quotes/data from sources with citations
+""",
+    "report": """
+## Response Style: Report
+- Format as a professional research report
+- Include sections: Summary, Key Findings, Details, Recommendations (as appropriate)
+- Use tables for comparative data
+- Cite sources with specific references
+- Be comprehensive but well-organized
+"""
+}
 
 
 # Tool definitions for Claude
@@ -411,6 +505,7 @@ def build_system_prompt(
     context_only: bool = False,
     has_data_files: bool = False,
     has_images: bool = False,
+    response_style: str = None,  # V4 Feature: "conversational", "structured", "report"
 ) -> str:
     """Build system prompt based on available tools, resources, and user instructions."""
     prompt_parts = [BASE_SYSTEM_PROMPT]
@@ -493,6 +588,10 @@ You are in CONTEXT-ONLY mode. This means:
             prompt_parts.append(resource_section)
     elif has_documents is False and has_data_files is False and has_images is False:
         prompt_parts.append("\n\nWorkspace Resources: None yet. The user hasn't uploaded any files.")
+
+    # V4 Feature: Add response style instructions
+    if response_style and response_style in STYLE_INSTRUCTIONS:
+        prompt_parts.append(STYLE_INSTRUCTIONS[response_style])
 
     return "\n".join(prompt_parts)
 
@@ -1602,6 +1701,15 @@ class Agent:
 
         Returns RequestPlan (V1), RequestPlanV2 (V2), or RequestPlanV3 (V3) based on self.version.
         """
+        # V4 Feature: Try regex pre-router first for instant responses
+        if self.version == "v3":
+            instant_plan = pre_route(message)
+            if instant_plan:
+                print(f"[Pre-Router] Matched! category={instant_plan.category}, direct_response={instant_plan.direct_response[:30] if instant_plan.direct_response else 'None'}...")
+                return instant_plan
+            else:
+                print(f"[Pre-Router] No match for: {message[:50]!r}")
+
         if self.version == "v3":
             return self._plan_request_v3(
                 message=message,
@@ -1737,12 +1845,11 @@ class Agent:
 
         all_sources = []
 
-        # Build tools and prompt based on what's available
+        # Build tools based on what's available
         # In context_only mode, disable web search
         has_web_search = bool(self.tavily_api_key) and not context_only
         can_save_findings = save_finding_callback is not None
         tools = build_tools(has_documents, has_web_search, can_save_findings, has_data_files, has_images, version=self.version)
-        system_prompt = build_system_prompt(has_documents, has_web_search, resources, system_instructions, context_only, has_data_files, has_images)
 
         # Step 1: Plan the request using the router
         plan = self.plan_request(
@@ -1786,6 +1893,7 @@ class Agent:
         # =====================================================================
         if self.version == "v3" and isinstance(plan, RequestPlanV3):
             has_history = bool(conversation_history and len(conversation_history) > 0)
+            print(f"[V3 Fast Path Check] category={plan.category}, direct_response={bool(plan.direct_response)}, has_history={has_history}, history_len={len(conversation_history) if conversation_history else 0}")
 
             # Fast path 1: SOCIAL (greetings, thanks)
             if plan.category == "social" and plan.direct_response and not has_history:
@@ -1902,6 +2010,15 @@ class Agent:
         # =====================================================================
         # Normal flow (V1, or V2 with doc_search/web_search/research/analysis)
         # =====================================================================
+
+        # V4 Feature: Build system prompt with adaptive style from plan
+        response_style = None
+        if isinstance(plan, RequestPlanV3):
+            response_style = plan.response_style
+        system_prompt = build_system_prompt(
+            has_documents, has_web_search, resources, system_instructions,
+            context_only, has_data_files, has_images, response_style
+        )
 
         # Build thinking config based on the plan's complexity
         thinking_config = None
