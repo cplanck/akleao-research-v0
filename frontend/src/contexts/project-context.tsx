@@ -105,6 +105,11 @@ export function ProjectProvider({
   // Map<threadId, Message[]>
   const messageCacheRef = useRef<Map<string, Message[]>>(new Map());
 
+  // Define cache invalidation early so it can be used by handleDeleteThread
+  const invalidateMessageCache = useCallback((threadId: string) => {
+    messageCacheRef.current.delete(threadId);
+  }, []);
+
   // Get WebSocket state from app-level context
   const {
     wsConnected,
@@ -377,10 +382,6 @@ export function ProjectProvider({
 
   const setCachedMessages = useCallback((threadId: string, messages: Message[]) => {
     messageCacheRef.current.set(threadId, messages);
-  }, []);
-
-  const invalidateMessageCache = useCallback((threadId: string) => {
-    messageCacheRef.current.delete(threadId);
   }, []);
 
   const prefetchMessages = useCallback((projectId: string, threadId: string) => {
