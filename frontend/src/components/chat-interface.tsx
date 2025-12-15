@@ -1141,29 +1141,25 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const banner = document.getElementById("subthread-banner");
 
         if (userMessageEl && scrollContainer) {
-          const containerRect = scrollContainer.getBoundingClientRect();
-          const messageRect = userMessageEl.getBoundingClientRect();
           const bannerHeight = banner ? banner.offsetHeight : 0;
           const padding = bannerHeight > 0 ? 8 : 16;
 
-          // Current visual distance from message to container top
-          const currentVisualOffset = messageRect.top - containerRect.top;
+          // Get message position relative to scroll content using offsetTop
+          // Need to account for wrapper divs between message and scroll container
+          let messageOffsetTop = 0;
+          let el: HTMLElement | null = userMessageEl;
+          while (el && el !== scrollContainer) {
+            messageOffsetTop += el.offsetTop;
+            el = el.offsetParent as HTMLElement | null;
+          }
 
-          // We want the message to be at (bannerHeight + padding) from container top
-          const desiredVisualOffset = bannerHeight + padding;
-
-          // Calculate how much to scroll
-          const scrollAdjustment = currentVisualOffset - desiredVisualOffset;
-          const targetScrollTop = scrollContainer.scrollTop + scrollAdjustment;
+          // Target scroll: position message at (bannerHeight + padding) from visible top
+          const targetScrollTop = messageOffsetTop - bannerHeight - padding;
 
           console.log('[SCROLL DEBUG]', {
             bannerHeight,
-            containerRectTop: containerRect.top,
-            messageRectTop: messageRect.top,
-            currentVisualOffset,
-            desiredVisualOffset,
-            scrollAdjustment,
-            currentScrollTop: scrollContainer.scrollTop,
+            padding,
+            messageOffsetTop,
             targetScrollTop,
             clampedTarget: Math.max(0, targetScrollTop)
           });
