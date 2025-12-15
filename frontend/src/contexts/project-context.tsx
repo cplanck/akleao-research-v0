@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useAppWebSocket } from "@/contexts/app-websocket-context";
 import { JobEvent, JobState } from "@/lib/app-websocket";
+import { toast } from "sonner";
 
 interface ProjectContextType {
   // Projects list
@@ -195,29 +196,113 @@ export function ProjectProvider({
 
   const handleCreateThread = useCallback(async () => {
     if (!selectedProject) return null;
+
+    // Optimistic update: create temp thread and add to UI immediately
+    const tempId = `temp-${Date.now()}`;
+    const tempThread: Thread = {
+      id: tempId,
+      project_id: selectedProject.id,
+      title: "New Thread",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      parent_thread_id: null,
+      context_text: null,
+      child_count: 0,
+    };
+
+    // Add to UI immediately
+    setSelectedProject({
+      ...selectedProject,
+      threads: [tempThread, ...selectedProject.threads],
+    });
+    setSelectedThread(tempThread);
+
     try {
-      const thread = await createThread(selectedProject.id);
-      await fetchProjectDetail(selectedProject.id, false);
-      setSelectedThread(thread);
-      return thread;
+      // Create on server
+      const realThread = await createThread(selectedProject.id);
+
+      // Replace temp thread with real thread
+      setSelectedProject(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          threads: prev.threads.map(t => t.id === tempId ? realThread : t),
+          last_thread_id: realThread.id,
+        };
+      });
+      setSelectedThread(realThread);
+      return realThread;
     } catch (error) {
       console.error("Failed to create thread:", error);
+      // Rollback: remove temp thread
+      setSelectedProject(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          threads: prev.threads.filter(t => t.id !== tempId),
+        };
+      });
+      setSelectedThread(null);
+      toast.error("Failed to create thread");
       return null;
     }
-  }, [selectedProject, fetchProjectDetail]);
+  }, [selectedProject]);
 
   const handleDeleteThread = useCallback(async (threadId: string) => {
     if (!selectedProject) return;
-    try {
-      await deleteThread(selectedProject.id, threadId);
-      if (selectedThread?.id === threadId) {
+
+    // Store thread for potential rollback
+    const threadToDelete = selectedProject.threads.find(t => t.id === threadId);
+    if (!threadToDelete) return;
+
+    const threadIndex = selectedProject.threads.findIndex(t => t.id === threadId);
+    const wasSelected = selectedThread?.id === threadId;
+
+    // Optimistic update: remove thread from UI immediately
+    setSelectedProject(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        threads: prev.threads.filter(t => t.id !== threadId),
+      };
+    });
+
+    // If deleted thread was selected, select another one
+    if (wasSelected) {
+      const remainingThreads = selectedProject.threads.filter(t => t.id !== threadId);
+      if (remainingThreads.length > 0) {
+        // Select the thread that was below it, or the last one
+        const newIndex = Math.min(threadIndex, remainingThreads.length - 1);
+        setSelectedThread(remainingThreads[newIndex]);
+      } else {
         setSelectedThread(null);
       }
-      await fetchProjectDetail(selectedProject.id, false);
+    }
+
+    try {
+      // Delete on server
+      await deleteThread(selectedProject.id, threadId);
+      // Invalidate message cache for deleted thread
+      invalidateMessageCache(threadId);
     } catch (error) {
       console.error("Failed to delete thread:", error);
+      // Rollback: restore thread to UI
+      setSelectedProject(prev => {
+        if (!prev) return prev;
+        const threads = [...prev.threads];
+        threads.splice(threadIndex, 0, threadToDelete);
+        return {
+          ...prev,
+          threads,
+        };
+      });
+      // Restore selection if it was selected
+      if (wasSelected) {
+        setSelectedThread(threadToDelete);
+      }
+      toast.error("Failed to delete thread");
     }
-  }, [selectedProject, selectedThread, fetchProjectDetail]);
+  }, [selectedProject, selectedThread, invalidateMessageCache]);
 
   const handleNavigateToThread = useCallback((thread: Thread) => {
     if (!selectedProject) return;
