@@ -1451,7 +1451,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const lastMessage = messages[messages.length - 1];
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
-          <div className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background">
+          <div className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom),env(keyboard-inset-bottom,0px))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background transition-[padding] duration-200">
               {/* Floating input container */}
               <div className="border border-border bg-card rounded-xl shadow-sm overflow-hidden">
                 {/* Single row input on mobile, two rows on desktop */}
