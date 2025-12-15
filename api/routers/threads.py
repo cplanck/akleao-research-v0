@@ -155,11 +155,34 @@ def list_threads(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Only return non-deleted threads, ordered by updated_at desc
-    threads = db.query(Thread).filter(
-        Thread.project_id == project_id,
-        Thread.deleted_at.is_(None)
-    ).order_by(Thread.updated_at.desc()).all()
+    # Subquery to count children for each thread (avoids N+1 query problem)
+    from sqlalchemy.orm import aliased
+    ChildThread = aliased(Thread)
+    child_count_subquery = (
+        db.query(
+            ChildThread.parent_thread_id,
+            func.count(ChildThread.id).label("child_count")
+        )
+        .filter(
+            ChildThread.project_id == project_id,
+            ChildThread.deleted_at.is_(None),
+            ChildThread.parent_thread_id.isnot(None)
+        )
+        .group_by(ChildThread.parent_thread_id)
+        .subquery()
+    )
+
+    # Main query with left join to get child counts in single query
+    threads_with_counts = (
+        db.query(Thread, func.coalesce(child_count_subquery.c.child_count, 0).label("child_count"))
+        .outerjoin(child_count_subquery, Thread.id == child_count_subquery.c.parent_thread_id)
+        .filter(
+            Thread.project_id == project_id,
+            Thread.deleted_at.is_(None)
+        )
+        .order_by(Thread.updated_at.desc())
+        .all()
+    )
 
     return [
         ThreadResponse(
@@ -170,9 +193,9 @@ def list_threads(
             updated_at=t.updated_at,
             parent_thread_id=t.parent_thread_id,
             context_text=t.context_text,
-            child_count=get_child_count(db, t.id)
+            child_count=child_count
         )
-        for t in threads
+        for t, child_count in threads_with_counts
     ]
 
 
