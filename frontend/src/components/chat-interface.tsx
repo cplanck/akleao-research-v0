@@ -1131,7 +1131,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       { id: `assistant-${tempId}`, role: "assistant" as const, content: "", sources: [] }
     ]);
 
-    // Smooth scroll to position user's message at the TOP of the chat viewport
+    // Smooth scroll to position user's message just below the sticky banner
     // Response will stream below it (like ChatGPT)
     // The streaming assistant message has min-height to create scroll room
     setTimeout(() => {
@@ -1140,13 +1140,25 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       const banner = document.getElementById("subthread-banner");
 
       if (userMessageEl && scrollContainer) {
-        // Get banner height if in subthread, otherwise use small padding
-        const bannerHeight = banner ? banner.getBoundingClientRect().height : 0;
-        const topPadding = bannerHeight > 0 ? bannerHeight + 8 : 16; // 8px extra breathing room
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const messageRect = userMessageEl.getBoundingClientRect();
+        const bannerHeight = banner ? banner.offsetHeight : 0;
+        const padding = bannerHeight > 0 ? 8 : 16;
 
-        // Apply scroll-margin-top to the message element so scrollIntoView positions it correctly
-        userMessageEl.style.scrollMarginTop = `${topPadding}px`;
-        userMessageEl.scrollIntoView({ block: "start", behavior: "smooth" });
+        // Current visual distance from message to container top
+        const currentVisualOffset = messageRect.top - containerRect.top;
+
+        // We want the message to be at (bannerHeight + padding) from container top
+        const desiredVisualOffset = bannerHeight + padding;
+
+        // Calculate how much to scroll
+        const scrollAdjustment = currentVisualOffset - desiredVisualOffset;
+        const targetScrollTop = scrollContainer.scrollTop + scrollAdjustment;
+
+        scrollContainer.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: "smooth"
+        });
       }
     }, 50);
 
