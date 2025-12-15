@@ -1132,7 +1132,6 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     ]);
 
     // Smooth scroll to position user's message just below the sticky banner
-    // Two-step approach: scrollIntoView first, then adjust for banner
     setTimeout(() => {
       requestAnimationFrame(() => {
         const userMessageEl = document.getElementById(`message-${tempId}`);
@@ -1140,24 +1139,33 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const banner = document.getElementById("subthread-banner");
 
         if (userMessageEl && scrollContainer) {
-          // Step 1: Scroll message to the top of the viewport (instant)
-          userMessageEl.scrollIntoView({ block: "start", behavior: "instant" });
-
-          // Step 2: Adjust for sticky banner - scroll UP to push message DOWN
           const bannerHeight = banner ? banner.offsetHeight : 0;
           const padding = bannerHeight > 0 ? 8 : 16;
+
+          // Get the message's position within the scroll content
+          const messageRect = userMessageEl.getBoundingClientRect();
+          const containerRect = scrollContainer.getBoundingClientRect();
+
+          // Where is the message relative to the scroll container's current view?
+          const messageVisualTop = messageRect.top - containerRect.top;
+
+          // We want the message at (bannerHeight + padding) from container top
+          // So we need to scroll by the difference
+          const scrollBy = messageVisualTop - bannerHeight - padding;
 
           console.log('[SCROLL DEBUG]', {
             bannerHeight,
             padding,
-            scrollTopBefore: scrollContainer.scrollTop,
-            adjustment: bannerHeight + padding
+            messageVisualTop,
+            scrollBy,
+            currentScrollTop: scrollContainer.scrollTop,
+            newScrollTop: scrollContainer.scrollTop + scrollBy
           });
 
-          // Decrease scrollTop to scroll up, which pushes content down
-          scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - bannerHeight - padding);
-
-          console.log('[SCROLL DEBUG] after:', { scrollTopAfter: scrollContainer.scrollTop });
+          scrollContainer.scrollTo({
+            top: scrollContainer.scrollTop + scrollBy,
+            behavior: "smooth"
+          });
         }
       });
     }, 100);
