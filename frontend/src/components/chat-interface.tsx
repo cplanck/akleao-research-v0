@@ -555,9 +555,11 @@ function useIsMobile(breakpoint: number = 768) {
 }
 
 // Custom hook to detect keyboard height using Visual Viewport API
-function useKeyboardHeight() {
+// Also counteracts Safari's auto-scroll behavior
+function useKeyboardHeight(scrollRef: React.RefObject<HTMLDivElement | null>) {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const initialHeightRef = useRef<number | null>(null);
+  const scrollPositionRef = useRef<number>(0);
 
   useEffect(() => {
     // Only run on client and if visualViewport is supported
@@ -575,6 +577,7 @@ function useKeyboardHeight() {
 
     const handleResize = () => {
       const viewportHeight = viewport.height;
+      const prevKeyboardHeight = keyboardHeight;
 
       // Update initial height if viewport gets larger (e.g., after rotation or keyboard close)
       // This handles orientation changes
@@ -587,7 +590,20 @@ function useKeyboardHeight() {
 
       // Only consider it a keyboard if it's substantial (> 100px)
       // This avoids false positives from browser chrome changes
-      setKeyboardHeight(newKeyboardHeight > 100 ? newKeyboardHeight : 0);
+      const finalKeyboardHeight = newKeyboardHeight > 100 ? newKeyboardHeight : 0;
+
+      // If keyboard just opened, save scroll position and prevent Safari's auto-scroll
+      if (finalKeyboardHeight > 0 && prevKeyboardHeight === 0 && scrollRef.current) {
+        scrollPositionRef.current = scrollRef.current.scrollTop;
+        // Use requestAnimationFrame to counteract Safari's scroll after it happens
+        requestAnimationFrame(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollPositionRef.current;
+          }
+        });
+      }
+
+      setKeyboardHeight(finalKeyboardHeight);
     };
 
     viewport.addEventListener("resize", handleResize);
@@ -600,14 +616,15 @@ function useKeyboardHeight() {
       viewport.removeEventListener("resize", handleResize);
       viewport.removeEventListener("scroll", handleResize);
     };
-  }, []);
+  }, [keyboardHeight, scrollRef]);
 
   return keyboardHeight;
 }
 
 export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId, contextText, ancestorThreads = [], onResourceAdded, onThreadTitleGenerated, onNavigateToThread, resources = [], rules = [], onRulesChange, isRulesDialogOpen: externalIsRulesDialogOpen, onRulesDialogOpenChange, onFindingSaved }: ChatInterfaceProps) {
   const isMobile = useIsMobile();
-  const keyboardHeight = useKeyboardHeight();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const keyboardHeight = useKeyboardHeight(scrollRef);
   // Get WebSocket state and cache functions from context
   const { subscribeToThread, currentJobState, currentJobEvent, getCachedMessages, setCachedMessages, invalidateMessageCache } = useProject();
 
@@ -632,7 +649,6 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   // ============================================
   // REFS: For tracking during streaming
   // ============================================
-  const scrollRef = useRef<HTMLDivElement>(null);
   const streamingRef = useRef<string>("");
   const sourcesRef = useRef<SourceInfo[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1244,7 +1260,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
       {/* Scrollable messages area */}
       <div className="flex-1 overflow-y-auto p-3 md:p-4 chat-scrollbar" ref={scrollRef}>
-        <div className="space-y-3 md:space-y-4 pb-4">
+        {/* Extra bottom padding to account for fixed input */}
+        <div className="space-y-3 md:space-y-4 pb-20">
           {!messagesLoaded ? (
             // Show loading state while messages are being fetched
             <div className="text-center text-muted-foreground py-12">
@@ -1504,8 +1521,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
           <div
-            className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background transition-[padding] duration-150"
-            style={keyboardHeight > 0 ? { paddingBottom: `${keyboardHeight + 6}px` } : undefined}
+            className="absolute bottom-0 left-0 right-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background transition-[transform] duration-150 z-10"
+            style={{ transform: keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined }}
           >
               {/* Floating input container */}
               <div className="border border-border bg-card rounded-xl shadow-sm overflow-hidden">
