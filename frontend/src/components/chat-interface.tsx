@@ -1451,7 +1451,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               {/* Floating input container */}
               <div className="border border-border bg-card rounded-lg shadow-sm overflow-hidden">
                 {/* Input row */}
-                <div className="flex items-end gap-2 p-2">
+                <div className="flex items-end gap-2 p-2 pb-0">
                   <Textarea
                     ref={inputRef}
                     autoFocus
@@ -1467,31 +1467,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                     className="min-h-[40px] max-h-[200px] resize-none flex-1 text-base md:text-sm border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
                     rows={1}
                   />
-                  <Button
-                    onClick={handleSubmit}
-                    disabled={isLoading || !input.trim()}
-                    size="sm"
-                    className={`h-9 px-3 shrink-0 ${isRespondMode ? "bg-violet-600 hover:bg-violet-700 text-white" : ""}`}
-                  >
-                    {isRespondMode ? (
-                      <>
-                        <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                        </svg>
-                        Reply
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                        </svg>
-                        Send
-                      </>
-                    )}
-                  </Button>
                 </div>
                 {/* Action buttons row */}
-                <div className="flex items-center gap-1 px-2 pb-2 pt-0">
+                <div className="flex items-center justify-between px-2 pb-2 pt-1">
                   <button
                     onClick={() => setContextOnly(!contextOnly)}
                     className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
@@ -1519,6 +1497,23 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                     )}
                   </button>
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={isLoading || !input.trim()}
+                    size="sm"
+                    className={`h-8 w-8 p-0 shrink-0 ${isRespondMode ? "bg-violet-600 hover:bg-violet-700 text-white" : ""}`}
+                    title={isRespondMode ? "Reply" : "Send"}
+                  >
+                    {isRespondMode ? (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                      </svg>
+                    )}
+                  </Button>
                 </div>
               </div>
           </div>
