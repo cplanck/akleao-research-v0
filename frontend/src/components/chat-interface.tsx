@@ -1312,13 +1312,13 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
             </div>
           ) : (
             messages.map((message, index) => {
-              // Give the last assistant message min-height ONLY during active streaming
+              // Give the last assistant message min-height during streaming OR when it's empty
               // This creates scroll room so user's message can scroll to top
-              // Don't apply on existing threads (would show excessive padding)
-              const isActiveStreamingMessage =
+              // Empty check covers the placeholder before isLoading becomes true
+              const needsScrollRoom =
                 message.role === "assistant" &&
                 index === messages.length - 1 &&
-                isLoading;
+                (isLoading || !message.content);
 
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
@@ -1330,7 +1330,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                 id={`message-${message.id}`}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
                 style={{
-                  ...(isActiveStreamingMessage ? { minHeight: 'calc(100vh - 200px)' } : {}),
+                  ...(needsScrollRoom ? { minHeight: 'calc(100vh - 200px)' } : {}),
                   scrollMarginTop: scrollMargin
                 }}
               >
