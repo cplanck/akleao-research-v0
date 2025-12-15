@@ -78,10 +78,25 @@ class ResourceType(str, enum.Enum):
 
 
 class ResourceStatus(str, enum.Enum):
-    PENDING = "pending"
-    INDEXING = "indexing"
-    READY = "ready"
-    FAILED = "failed"
+    # Stage 1: Upload complete
+    PENDING = "pending"      # Legacy - kept for backwards compat, same as UPLOADED
+    UPLOADED = "uploaded"    # File saved, basic metadata captured
+
+    # Stage 2: Extraction
+    EXTRACTING = "extracting"  # Type-specific extraction in progress
+    EXTRACTED = "extracted"    # Extraction complete
+    STORED = "stored"          # No extraction possible (binary files)
+
+    # Stage 3: Semantic enrichment
+    INDEXING = "indexing"      # RAG indexing or analysis in progress
+    INDEXED = "indexed"        # Full RAG indexing complete (documents)
+    ANALYZED = "analyzed"      # Data analysis complete (data files)
+    DESCRIBED = "described"    # Vision description complete (images)
+
+    # Terminal states
+    READY = "ready"            # Fully processed (backwards compat alias)
+    PARTIAL = "partial"        # Stage 1+2 complete, Stage 3 failed (still usable!)
+    FAILED = "failed"          # Stage 1 or 2 failed (unusable)
 
 
 class MessageRole(str, enum.Enum):
@@ -195,7 +210,8 @@ class Resource(Base):
     filename = Column(String, nullable=True)  # original filename for uploads
     status = Column(Enum(ResourceStatus), default=ResourceStatus.PENDING)
     error_message = Column(Text, nullable=True)
-    metadata_ = Column("metadata", Text, nullable=True)  # JSON string for type-specific info
+    error_stage = Column(String, nullable=True)  # "extraction" or "indexing" - which stage failed
+    metadata_ = Column("metadata", Text, nullable=True)  # JSON string for type-specific info (legacy)
     summary = Column(Text, nullable=True)  # LLM-generated summary of the document content
     created_at = Column(DateTime, default=datetime.utcnow)
     indexed_at = Column(DateTime, nullable=True)  # When indexing completed
@@ -204,6 +220,14 @@ class Resource(Base):
     commit_hash = Column(String, nullable=True)  # Git commit SHA for tracking updates
     pinecone_namespace = Column(String, nullable=True)  # Namespace used when indexing in Pinecone
     content_hash = Column(String(64), nullable=True, unique=True, index=True)  # SHA256 hash for deduplication
+
+    # === New fields for unified upload flow ===
+    mime_type = Column(String, nullable=True)  # e.g., "application/pdf", "text/csv"
+    storage_backend = Column(String, default="local")  # "local" or "gcs"
+    extracted_at = Column(DateTime, nullable=True)  # When extraction (Stage 2) completed
+    extraction_duration_ms = Column(Integer, nullable=True)  # Stage 2 duration
+    extraction_metadata = Column(Text, nullable=True)  # JSON: type-specific extraction data
+    chunk_count = Column(Integer, nullable=True)  # Number of chunks indexed (for RAG docs)
 
     # Many-to-many relationship with projects via bridge table
     project_resources = relationship("ProjectResource", back_populates="resource", cascade="all, delete-orphan")

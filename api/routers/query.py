@@ -15,11 +15,40 @@ from rag.embeddings import Embedder
 from rag.vectorstore import VectorStore
 from rag.retriever import Retriever
 from rag.agent import Agent, ResourceInfo
+import time
 
 router = APIRouter(tags=["query"])
 
 # Load environment
 load_dotenv()
+
+# ============================================================================
+# V4 Feature: Resource Cache with TTL
+# ============================================================================
+_resource_cache: dict[int, tuple[list[ResourceInfo], float]] = {}
+_resource_cache_ttl = 60  # seconds
+
+
+def _get_resources_cached(project_id: int, project) -> list[ResourceInfo]:
+    """Get resources with 60-second cache to avoid DB round-trips."""
+    global _resource_cache
+    now = time.time()
+
+    if project_id in _resource_cache:
+        cached_resources, timestamp = _resource_cache[project_id]
+        if now - timestamp < _resource_cache_ttl:
+            return cached_resources
+
+    # Fetch fresh
+    resources = _build_resources_list(project)
+    _resource_cache[project_id] = (resources, now)
+    return resources
+
+
+def invalidate_resource_cache(project_id: int):
+    """Invalidate cache when resources are added/removed/modified."""
+    global _resource_cache
+    _resource_cache.pop(project_id, None)
 
 
 def get_agent(version: Optional[str] = None):
@@ -48,16 +77,16 @@ def get_agent(version: Optional[str] = None):
 def _build_resources_list(project) -> list[ResourceInfo]:
     """Build a list of ResourceInfo from project resources with metadata.
 
-    Only includes resources with READY status to avoid presenting failed
-    or pending resources to the agent.
+    Includes all resources except failed ones, so the agent can see files
+    that are still processing (uploaded, extracting, indexing, etc.).
     """
     import json
     import os
 
     resources = []
     for r in project.resources:
-        # Only include READY resources - skip failed/pending/indexing
-        if r.status.value != "ready":
+        # Skip only failed resources - show everything else including processing
+        if r.status.value == "failed":
             continue
 
         # For data files and images, verify the file actually exists
@@ -217,8 +246,8 @@ def query_thread(
 
     agent = get_agent()
 
-    # Build resources list for agent self-awareness
-    resources = _build_resources_list(project)
+    # V4 Feature: Use cached resources to avoid DB round-trips
+    resources = _get_resources_cached(project_id, project)
 
     # Check what types of resources exist
     has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
@@ -316,8 +345,8 @@ def query_thread_stream(
 
     agent = get_agent(version=agent_version)
 
-    # Build resources list for agent self-awareness
-    resources = _build_resources_list(project)
+    # V4 Feature: Use cached resources to avoid DB round-trips
+    resources = _get_resources_cached(project_id, project)
 
     # Check what types of resources exist
     has_documents = any(r.type in ("document", "website", "git_repository") for r in resources)
