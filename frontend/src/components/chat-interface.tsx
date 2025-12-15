@@ -1458,7 +1458,6 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                 <div className="flex items-end gap-1.5 p-1.5 sm:p-2 sm:pb-0">
                   <Textarea
                     ref={inputRef}
-                    autoFocus
                     placeholder={isRespondMode ? "Type your response..." : "Ask a question..."}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
