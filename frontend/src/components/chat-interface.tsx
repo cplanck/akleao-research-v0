@@ -849,17 +849,30 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
 
   // Preserve scroll position when streaming ends (prevents jump when min-height removed)
   const prevIsLoadingRef = useRef(isLoading);
+  const savedScrollTopRef = useRef<number | null>(null);
+
+  // Save scroll position while streaming (continuously updated)
+  useEffect(() => {
+    if (isLoading && scrollRef.current && isInConversationRef.current) {
+      savedScrollTopRef.current = scrollRef.current.scrollTop;
+    }
+  }, [isLoading, messages]); // Update on message changes during streaming
+
   useEffect(() => {
     // When isLoading transitions from true to false (streaming ended)
-    if (prevIsLoadingRef.current && !isLoading && scrollRef.current && isInConversationRef.current) {
-      // Save current scroll position
-      const savedScrollTop = scrollRef.current.scrollTop;
-      // Restore it after React re-renders and min-height is removed
-      requestAnimationFrame(() => {
+    if (prevIsLoadingRef.current && !isLoading && savedScrollTopRef.current !== null && isInConversationRef.current) {
+      const savedScrollTop = savedScrollTopRef.current;
+      // Restore scroll position multiple times to catch layout shifts
+      const restore = () => {
         if (scrollRef.current) {
           scrollRef.current.scrollTop = savedScrollTop;
         }
-      });
+      };
+      // Immediate, next frame, and after a short delay
+      restore();
+      requestAnimationFrame(restore);
+      setTimeout(restore, 50);
+      setTimeout(restore, 100);
     }
     prevIsLoadingRef.current = isLoading;
   }, [isLoading]);
