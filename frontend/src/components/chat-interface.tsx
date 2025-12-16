@@ -1163,7 +1163,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     setTimeout(() => {
       const userMessageEl = document.getElementById(`message-${tempId}`);
       if (userMessageEl) {
-        userMessageEl.scrollIntoView({ block: 'start', behavior: 'instant' });
+        userMessageEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
     }, 50);
 
@@ -1293,8 +1293,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
           </div>
         )}
 
-        {/* Messages container with padding */}
-        <div className="p-3 md:p-4">
+        {/* Messages container with padding - extra top padding for first message breathing room */}
+        <div className="px-3 md:px-4 pt-6 pb-3 md:pb-4">
         <div className="space-y-3 md:space-y-4 pb-4">
           {!messagesLoaded ? (
             // Show loading state while messages are being fetched
@@ -1319,8 +1319,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
               // Banner is ~63px, so 72px puts message 9px below it
-              // Regular threads get 24px padding from top
-              const scrollMargin = parentThreadId ? '72px' : '24px';
+              // Regular threads get 24px to match container's top padding
+              const scrollMargin = parentThreadId ? '80px' : '24px';
 
               return (
               <div
