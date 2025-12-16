@@ -847,6 +847,23 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     isInConversationRef.current = false;
   }, [threadId]);
 
+  // Preserve scroll position when streaming ends (prevents jump when min-height removed)
+  const prevIsLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    // When isLoading transitions from true to false (streaming ended)
+    if (prevIsLoadingRef.current && !isLoading && scrollRef.current && isInConversationRef.current) {
+      // Save current scroll position
+      const savedScrollTop = scrollRef.current.scrollTop;
+      // Restore it after React re-renders and min-height is removed
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = savedScrollTop;
+        }
+      });
+    }
+    prevIsLoadingRef.current = isLoading;
+  }, [isLoading]);
+
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
   useEffect(() => {
