@@ -1319,7 +1319,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
               // Banner is ~63px, so 72px puts message 9px below it
-              const scrollMargin = parentThreadId ? '72px' : '16px';
+              // Regular threads get 24px padding from top
+              const scrollMargin = parentThreadId ? '72px' : '24px';
 
               return (
               <div
