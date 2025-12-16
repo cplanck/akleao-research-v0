@@ -847,36 +847,6 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     isInConversationRef.current = false;
   }, [threadId]);
 
-  // Preserve scroll position when streaming ends (prevents jump when min-height removed)
-  const prevIsLoadingRef = useRef(isLoading);
-  const savedScrollTopRef = useRef<number | null>(null);
-
-  // Save scroll position while streaming (continuously updated)
-  useEffect(() => {
-    if (isLoading && scrollRef.current && isInConversationRef.current) {
-      savedScrollTopRef.current = scrollRef.current.scrollTop;
-    }
-  }, [isLoading, messages]); // Update on message changes during streaming
-
-  useEffect(() => {
-    // When isLoading transitions from true to false (streaming ended)
-    if (prevIsLoadingRef.current && !isLoading && savedScrollTopRef.current !== null && isInConversationRef.current) {
-      const savedScrollTop = savedScrollTopRef.current;
-      // Restore scroll position multiple times to catch layout shifts
-      const restore = () => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = savedScrollTop;
-        }
-      };
-      // Immediate, next frame, and after a short delay
-      restore();
-      requestAnimationFrame(restore);
-      setTimeout(restore, 50);
-      setTimeout(restore, 100);
-    }
-    prevIsLoadingRef.current = isLoading;
-  }, [isLoading]);
-
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
   useEffect(() => {
@@ -1338,13 +1308,13 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
             </div>
           ) : (
             messages.map((message, index) => {
-              // Give the last assistant message min-height during streaming OR when it's empty
+              // Give the last assistant message min-height during active conversation
               // This creates scroll room so user's message can scroll to top
-              // Empty check covers the placeholder before isLoading becomes true
+              // Keep it while in conversation to prevent layout shift when streaming ends
               const needsScrollRoom =
                 message.role === "assistant" &&
                 index === messages.length - 1 &&
-                (isLoading || !message.content);
+                isInConversationRef.current;
 
               // scroll-margin-top tells browser to add space when using scrollIntoView
               // This ensures messages scroll to below the sticky banner in subthreads
