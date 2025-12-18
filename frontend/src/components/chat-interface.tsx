@@ -1310,7 +1310,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
               <div
                 key={message.id}
                 id={`message-${message.id}`}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex ${message.role === "user" ? `justify-end ${index > 0 ? "mt-6 md:mt-8" : ""}` : "justify-start"}`}
                 style={{
                   ...(needsScrollRoom ? { minHeight: 'calc(100vh - 200px)' } : {}),
                   scrollMarginTop: scrollMargin
@@ -1323,7 +1323,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                       : ""
                   }`}
                 >
-                  <div className="text-base">
+                  <div className="">
                     {message.role === "assistant" ? (
                       <>
                         {/* 1. Status panel - shows acknowledgment first, then activity log */}

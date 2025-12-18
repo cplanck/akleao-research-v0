@@ -124,6 +124,11 @@ class GitRepoResourceCreate(BaseModel):
     branch: str | None = None  # Optional branch, defaults to default branch
 
 
+class TextResourceCreate(BaseModel):
+    title: str  # Title/name for the text resource
+    content: str  # The actual text content
+
+
 # Query schemas
 class ConversationMessage(BaseModel):
     role: str  # "user" or "assistant"

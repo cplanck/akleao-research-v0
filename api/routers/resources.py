@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from api.database import get_db, Project, Resource, ResourceType, ResourceStatus, ProjectResource, DataResourceMetadata, ImageResourceMetadata, User
 from api.middleware.auth import get_current_user
-from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate, ResourceLinkRequest, GlobalResourceResponse, DataFileMetadata, ImageMetadata
+from api.schemas import ResourceResponse, UrlResourceCreate, GitRepoResourceCreate, TextResourceCreate, ResourceLinkRequest, GlobalResourceResponse, DataFileMetadata, ImageMetadata
 from api.utils.hashing import compute_content_hash, compute_url_hash, compute_git_hash
 from api.utils.file_types import detect_file_category, get_resource_type, is_allowed_extension, FileCategory, format_allowed_extensions
 from api.storage import get_storage
@@ -884,6 +884,69 @@ def index_url(resource_id: str, url: str):
         db.close()
 
 
+def index_text(resource_id: str, content: str):
+    """Background task to index a text resource.
+
+    Saves the text content as a file and indexes it for RAG.
+    Uses resource_id as Pinecone namespace for global resource sharing.
+    """
+    from api.database import SessionLocal
+    from datetime import datetime
+    import traceback
+    import time
+    import tempfile
+
+    db = SessionLocal()
+    try:
+        resource = db.query(Resource).filter(Resource.id == resource_id).first()
+        if not resource:
+            return
+
+        resource.status = ResourceStatus.INDEXING
+        db.commit()
+
+        start_time = time.time()
+        try:
+            # Write text content to a temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as tmp:
+                tmp.write(content)
+                local_path = tmp.name
+
+            try:
+                pipeline = get_pipeline()
+                # Use resource_id as namespace for global resource sharing
+                result = pipeline.ingest(
+                    local_path,
+                    namespace=resource_id,
+                    resource_id=resource_id,
+                    generate_summary=True
+                )
+
+                # Calculate duration and record timing
+                duration_ms = int((time.time() - start_time) * 1000)
+                resource.status = ResourceStatus.READY
+                resource.indexed_at = datetime.utcnow()
+                resource.indexing_duration_ms = duration_ms
+                resource.pinecone_namespace = resource_id
+                # Save the generated summary
+                if result.get("summary"):
+                    resource.summary = result["summary"]
+                db.commit()
+            finally:
+                # Clean up temp file
+                import os as temp_os
+                if temp_os.path.exists(local_path):
+                    temp_os.remove(local_path)
+        except Exception as e:
+            print(f"Error indexing text resource: {e}")
+            traceback.print_exc()
+            resource.status = ResourceStatus.FAILED
+            resource.error_message = str(e)
+            db.commit()
+    finally:
+        db.close()
+
+
 def index_git_repository(resource_id: str, repo_url: str, branch: str | None):
     """Background task to clone and index a git repository.
 
@@ -1129,6 +1192,64 @@ async def add_url_resource(
 
     db.refresh(resource)
     # V4: Invalidate resource cache since project now has new resource
+    invalidate_resource_cache(project_id)
+    return resource_to_response(resource)
+
+
+@router.post("/text", response_model=ResourceResponse)
+async def add_text_resource(
+    project_id: str,
+    request: TextResourceCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    """Add and index a text resource (user-pasted content).
+
+    The text is indexed for RAG search just like documents or websites.
+    """
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == user.id
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Compute hash based on content
+    content_hash = compute_content_hash(content=request.content.encode('utf-8'))
+
+    # Check if resource with same hash already exists
+    existing_resource = db.query(Resource).filter(
+        Resource.content_hash == content_hash
+    ).first()
+
+    if existing_resource and existing_resource.status == ResourceStatus.READY:
+        # Resource already exists and is indexed - just link to this project
+        _link_resource_to_project(db, existing_resource, project_id)
+        db.refresh(existing_resource)
+        invalidate_resource_cache(project_id)
+        return resource_to_response(existing_resource)
+
+    # Create resource record
+    resource = Resource(
+        type=ResourceType.TEXT,
+        source=f"text:{request.title}",  # Use "text:" prefix for identification
+        filename=request.title,
+        status=ResourceStatus.PENDING,
+        content_hash=content_hash,
+        file_size_bytes=len(request.content.encode('utf-8'))
+    )
+    db.add(resource)
+    db.commit()
+    db.refresh(resource)
+
+    # Create link to this project
+    _link_resource_to_project(db, resource, project_id)
+
+    # Index in background
+    background_tasks.add_task(index_text, resource.id, request.content)
+
+    db.refresh(resource)
     invalidate_resource_cache(project_id)
     return resource_to_response(resource)
 
@@ -1397,6 +1518,13 @@ async def reindex_resource(
             resource.source,  # URL
             None  # Use default branch on reindex
         )
+    elif resource.type == ResourceType.TEXT:
+        # Text resources don't store the original content, so reindexing is not supported
+        resource.status = ResourceStatus.FAILED
+        resource.error_message = "Reindexing is not supported for text resources. Please delete and re-add the content."
+        db.commit()
+        db.refresh(resource)
+        raise HTTPException(status_code=400, detail="Reindexing is not supported for text resources")
 
     # V4: Invalidate resource cache since resource status changed to PENDING
     invalidate_resource_cache(project_id)
@@ -1415,11 +1543,19 @@ def list_all_resources(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    """List all global resources (resource library).
+    """List all global resources (resource library) for the current user.
 
     Optional filtering by status.
     """
-    query = db.query(Resource)
+    # Get all project IDs belonging to this user
+    user_project_ids = [p.id for p in db.query(Project.id).filter(Project.user_id == user.id).all()]
+
+    # Get resources that are linked to any of the user's projects
+    query = db.query(Resource).join(
+        ProjectResource, Resource.id == ProjectResource.resource_id
+    ).filter(
+        ProjectResource.project_id.in_(user_project_ids)
+    ).distinct()
 
     if status:
         query = query.filter(Resource.status == status)

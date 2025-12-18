@@ -540,13 +540,13 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
       );
     },
     p({ children }) {
-      return <p className="mb-4 md:mb-6 last:mb-0">{children}</p>;
+      return <p className="mb-5 md:mb-7 last:mb-0">{children}</p>;
     },
     ul({ children }) {
-      return <ul className="list-disc pl-5 mb-4 md:mb-6 space-y-2">{children}</ul>;
+      return <ul className="list-disc pl-5 mb-5 md:mb-7 space-y-2">{children}</ul>;
     },
     ol({ children }) {
-      return <ol className="list-decimal pl-5 mb-4 md:mb-6 space-y-2">{children}</ol>;
+      return <ol className="list-decimal pl-5 mb-5 md:mb-7 space-y-2">{children}</ol>;
     },
     li({ children }) {
       return <li>{children}</li>;
@@ -569,14 +569,14 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
     },
     blockquote({ children }) {
       return (
-        <blockquote className="border-l-2 border-muted-foreground/30 pl-3 italic my-2">
+        <blockquote className="border-l-2 border-muted-foreground/30 pl-3 italic my-5 md:my-7">
           {children}
         </blockquote>
       );
     },
     table({ children }) {
       return (
-        <div className="overflow-x-auto my-2">
+        <div className="overflow-x-auto my-5 md:my-7">
           <table className="min-w-full border-collapse text-sm">{children}</table>
         </div>
       );
@@ -590,7 +590,7 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
   }), [onAddUrl]);
 
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
+    <div className="prose dark:prose-invert max-w-none leading-relaxed">
       {/* Render stable blocks - these are memoized and won't re-render */}
       {isStreaming && stableBlocks.map((block, i) => (
         <MemoizedMarkdownBlock

@@ -74,6 +74,7 @@ class ResourceType(str, enum.Enum):
     GIT_REPOSITORY = "git_repository"
     DATA_FILE = "data_file"  # CSV, Excel, JSON
     IMAGE = "image"  # PNG, JPG, etc.
+    TEXT = "text"  # Plain text pasted by user
 
 
 class ResourceStatus(str, enum.Enum):

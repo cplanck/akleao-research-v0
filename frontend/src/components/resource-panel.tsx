@@ -9,10 +9,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Resource, GlobalResource, uploadResource, deleteResource, getResourceFileUrl, addUrlResource, addGitResource, reindexResource, listGlobalResources, linkResourceToProject } from "@/lib/api";
+import { Resource, GlobalResource, uploadResource, deleteResource, getResourceFileUrl, addUrlResource, addGitResource, addTextResource, reindexResource, listGlobalResources, linkResourceToProject } from "@/lib/api";
 import { toast } from "sonner";
+import { Upload, Globe, GitBranch, Library, FileText, ChevronRight, RefreshCw, Trash2, ExternalLink, File, Table, Image, Check, Plus, Search } from "lucide-react";
 
 // Authenticated image component - fetches with credentials
 function AuthenticatedImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
@@ -528,10 +528,16 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
   const [isUploading, setIsUploading] = useState(false);
   const [isAddingUrl, setIsAddingUrl] = useState(false);
   const [isAddingGit, setIsAddingGit] = useState(false);
+  const [isAddingText, setIsAddingText] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [viewingResource, setViewingResource] = useState<Resource | null>(null);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [addMode, setAddMode] = useState<'library' | 'files' | 'website' | 'git' | 'text'>('files');
+  const [librarySearch, setLibrarySearch] = useState("");
   const [urlInput, setUrlInput] = useState("");
+  const [textTitle, setTextTitle] = useState("");
+  const [textContent, setTextContent] = useState("");
+  const [textError, setTextError] = useState<string | null>(null);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [gitUrlInput, setGitUrlInput] = useState("");
   const [gitBranchInput, setGitBranchInput] = useState("");
@@ -847,19 +853,79 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
 
   const handleAddResourceClick = () => {
     setAddDialogOpen(true);
+    loadLibraryResources(); // Load library when dialog opens
   };
 
   const handleDialogClose = (open: boolean) => {
     setAddDialogOpen(open);
     if (!open) {
       // Reset state when closing
+      setAddMode('files');
+      setLibrarySearch("");
       setUrlInput("");
       setUrlError(null);
       setGitUrlInput("");
       setGitBranchInput("");
       setGitError(null);
+      setTextTitle("");
+      setTextContent("");
+      setTextError(null);
     }
   };
+
+  const handleAddText = async () => {
+    if (!textContent.trim()) {
+      setTextError("Please enter some text content");
+      return;
+    }
+
+    // Use title or generate from content
+    const title = textTitle.trim() || textContent.trim().slice(0, 50) + (textContent.length > 50 ? "..." : "");
+
+    // Capture values before resetting
+    const content = textContent.trim();
+    const titleValue = title;
+
+    // Create optimistic pending upload
+    const pendingId = `pending-text-${Date.now()}`;
+    const pendingUpload: PendingUpload = {
+      id: pendingId,
+      filename: titleValue,
+      type: "document",
+    };
+    setPendingUploads(prev => [...prev, pendingUpload]);
+
+    // Close dialog and reset immediately
+    setTextTitle("");
+    setTextContent("");
+    setAddDialogOpen(false);
+
+    setIsAddingText(true);
+    setTextError(null);
+    try {
+      await addTextResource(projectId, titleValue, content);
+      // Remove pending upload
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
+      onRefresh();
+      toast.success("Text added, indexing...");
+    } catch (error) {
+      console.error("Failed to add text:", error);
+      // Remove pending upload on error
+      setPendingUploads(prev => prev.filter(p => p.id !== pendingId));
+      toast.error("Failed to add text. Please try again.");
+    } finally {
+      setIsAddingText(false);
+    }
+  };
+
+  // Filter library resources based on search
+  const filteredLibraryResources = libraryResources.filter(resource => {
+    if (!librarySearch.trim()) return true;
+    const search = librarySearch.toLowerCase();
+    const filename = (resource.filename || '').toLowerCase();
+    const source = (resource.source || '').toLowerCase();
+    return filename.includes(search) || source.includes(search);
+  });
 
   return (
     <>
@@ -1153,250 +1219,398 @@ export function ResourcePanel({ projectId, resources, onRefresh }: ResourcePanel
 
       {/* Add Resource dialog */}
       <Dialog open={addDialogOpen} onOpenChange={handleDialogClose}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Resource</DialogTitle>
-          </DialogHeader>
-          <Tabs defaultValue="library" className="w-full" onValueChange={(value) => {
-            if (value === "library") {
-              loadLibraryResources();
-            }
-          }}>
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="library" className="flex items-center gap-1.5 text-xs" onClick={() => loadLibraryResources()}>
-                <LibraryIcon className="h-3.5 w-3.5" />
-                <span>Library</span>
-              </TabsTrigger>
-              <TabsTrigger value="upload" className="flex items-center gap-1.5 text-xs">
-                <ComputerIcon className="h-3.5 w-3.5" />
-                <span>File</span>
-              </TabsTrigger>
-              <TabsTrigger value="url" className="flex items-center gap-1.5 text-xs">
-                <GlobeIcon className="h-3.5 w-3.5" />
-                <span>Website</span>
-              </TabsTrigger>
-              <TabsTrigger value="git" className="flex items-center gap-1.5 text-xs">
-                <GitBranchIcon className="h-3.5 w-3.5" />
-                <span>Git Repo</span>
-              </TabsTrigger>
-            </TabsList>
+        <DialogContent className="sm:max-w-3xl p-0 gap-0 overflow-hidden">
+          <div className="flex h-[500px]">
+            {/* Left sidebar - navigation */}
+            <div className="w-48 border-r bg-muted/30 flex flex-col">
+              {/* Library section */}
+              <div className="p-3 border-b">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">From Library</p>
+                <button
+                  onClick={() => setAddMode('library')}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                    addMode === 'library'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-muted'
+                  }`}
+                >
+                  <Library className="h-4 w-4" />
+                  <span>My Resources</span>
+                </button>
+              </div>
 
-            {/* Library Tab */}
-            <TabsContent value="library" className="mt-4">
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {isLoadingLibrary ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Spinner className="h-6 w-6 text-muted-foreground" />
-                  </div>
-                ) : libraryResources.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    No resources in library yet. Upload a file, add a website, or add a git repository to get started.
-                  </p>
-                ) : (
-                  libraryResources.map((resource) => {
-                    const inProject = isResourceInProject(resource.id);
-                    return (
-                      <div
-                        key={resource.id}
-                        className="flex items-center justify-between p-3 rounded-md bg-muted/50 hover:bg-muted/80"
-                      >
-                        <div className="flex-1 min-w-0 mr-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate">
-                              {resource.filename || resource.source}
-                            </span>
-                            {resource.is_shared && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">
-                                Shared
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-xs text-muted-foreground capitalize">
-                              {resource.type.replace("_", " ")}
-                            </span>
-                            {resource.project_count > 1 && (
-                              <span className="text-xs text-muted-foreground">
-                                Used in {resource.project_count} projects
-                              </span>
-                            )}
-                          </div>
+              {/* Add New section */}
+              <div className="p-3 flex-1">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Add New</p>
+                <div className="space-y-1">
+                  <button
+                    onClick={() => setAddMode('files')}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                      addMode === 'files'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    }`}
+                  >
+                    <Upload className="h-4 w-4" />
+                    <span>Upload Files</span>
+                  </button>
+                  <button
+                    onClick={() => setAddMode('website')}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                      addMode === 'website'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    }`}
+                  >
+                    <Globe className="h-4 w-4" />
+                    <span>Website</span>
+                  </button>
+                  <button
+                    onClick={() => setAddMode('git')}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                      addMode === 'git'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    }`}
+                  >
+                    <GitBranch className="h-4 w-4" />
+                    <span>Git Repository</span>
+                  </button>
+                  <button
+                    onClick={() => setAddMode('text')}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                      addMode === 'text'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    }`}
+                  >
+                    <FileText className="h-4 w-4" />
+                    <span>Paste Text</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Right content area */}
+            <div className="flex-1 flex flex-col min-w-0">
+              {/* Header */}
+              <DialogHeader className="px-6 py-4 border-b">
+                <DialogTitle>
+                  {addMode === 'library' && 'Add from Library'}
+                  {addMode === 'files' && 'Upload Files'}
+                  {addMode === 'website' && 'Add Website'}
+                  {addMode === 'git' && 'Add Git Repository'}
+                  {addMode === 'text' && 'Paste Text'}
+                </DialogTitle>
+              </DialogHeader>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {/* Library Content */}
+                {addMode === 'library' && (
+                  <div className="space-y-4">
+                    {/* Search */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search your resources..."
+                        value={librarySearch}
+                        onChange={(e) => setLibrarySearch(e.target.value)}
+                        className="pl-9"
+                      />
+                    </div>
+
+                    {/* Resource list */}
+                    <div className="space-y-2">
+                      {isLoadingLibrary ? (
+                        <div className="flex items-center justify-center py-12">
+                          <Spinner className="h-6 w-6 text-muted-foreground" />
                         </div>
-                        {inProject ? (
-                          <span className="flex items-center gap-1 text-xs text-green-500">
-                            <CheckIcon className="h-3.5 w-3.5" />
-                            Added
-                          </span>
-                        ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={() => handleLinkResource(resource.id)}
-                            disabled={linkingResourceId === resource.id}
-                          >
-                            {linkingResourceId === resource.id ? (
-                              <Spinner className="h-3.5 w-3.5" />
-                            ) : (
-                              <>
-                                <PlusIcon className="h-3.5 w-3.5 mr-1" />
-                                Add
-                              </>
-                            )}
-                          </Button>
-                        )}
+                      ) : filteredLibraryResources.length === 0 ? (
+                        <div className="text-center py-12">
+                          <Library className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
+                          <p className="text-sm text-muted-foreground">
+                            {librarySearch ? 'No resources match your search' : 'No resources in your library yet'}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Upload files or add websites to build your library
+                          </p>
+                        </div>
+                      ) : (
+                        filteredLibraryResources.map((resource) => {
+                          const inProject = isResourceInProject(resource.id);
+                          return (
+                            <div
+                              key={resource.id}
+                              className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <div className="h-9 w-9 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+                                  <ResourceTypeIcon type={resource.type} className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium truncate">
+                                    {resource.filename || resource.source}
+                                  </p>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className="text-xs text-muted-foreground capitalize">
+                                      {resource.type.replace("_", " ")}
+                                    </span>
+                                    {resource.project_count > 1 && (
+                                      <span className="text-xs text-muted-foreground">
+                                        • {resource.project_count} projects
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              {inProject ? (
+                                <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-500 px-3 py-1.5 rounded-md bg-green-500/10">
+                                  <Check className="h-3.5 w-3.5" />
+                                  Added
+                                </span>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleLinkResource(resource.id)}
+                                  disabled={linkingResourceId === resource.id}
+                                >
+                                  {linkingResourceId === resource.id ? (
+                                    <Spinner className="h-4 w-4" />
+                                  ) : (
+                                    <>
+                                      <Plus className="h-4 w-4 mr-1.5" />
+                                      Add to Project
+                                    </>
+                                  )}
+                                </Button>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Files Content */}
+                {addMode === 'files' && (
+                  <div
+                    className={`h-full min-h-[300px] border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors ${
+                      dragActive
+                        ? "border-primary bg-primary/5"
+                        : "border-muted-foreground/25 hover:border-muted-foreground/50"
+                    }`}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragActive(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setDragActive(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragActive(false);
+                      handleFiles(e.dataTransfer.files, true);
+                    }}
+                  >
+                    <Upload className="h-12 w-12 mb-4 text-muted-foreground" />
+                    <p className="text-base font-medium mb-1">
+                      Drop files here
+                    </p>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      or click to browse
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? "Uploading..." : "Browse Files"}
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      multiple
+                      accept=".pdf,.docx,.md,.txt,.markdown,.html,.csv,.xlsx,.xls,.json,.parquet,.tsv,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.tiff"
+                      onChange={(e) => {
+                        handleFiles(e.target.files, true);
+                        e.target.value = "";
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground mt-6 text-center max-w-md">
+                      Supported: PDF, DOCX, Markdown, TXT, CSV, Excel, JSON, PNG, JPG, GIF
+                    </p>
+                  </div>
+                )}
+
+                {/* Website Content */}
+                {addMode === 'website' && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
+                      <div className="h-12 w-12 rounded-lg bg-background flex items-center justify-center">
+                        <Globe className="h-6 w-6 text-muted-foreground" />
                       </div>
-                    );
-                  })
+                      <div>
+                        <p className="text-sm font-medium">Add a webpage</p>
+                        <p className="text-xs text-muted-foreground">
+                          The content will be fetched and indexed for search
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <Input
+                        placeholder="https://example.com/page"
+                        value={urlInput}
+                        onChange={(e) => {
+                          setUrlInput(e.target.value);
+                          setUrlError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleAddUrl();
+                        }}
+                        disabled={isAddingUrl}
+                        className="h-11"
+                      />
+                      {urlError && (
+                        <p className="text-sm text-destructive">{urlError}</p>
+                      )}
+                      <Button
+                        className="w-full"
+                        onClick={handleAddUrl}
+                        disabled={isAddingUrl || !urlInput.trim()}
+                      >
+                        {isAddingUrl ? (
+                          <>
+                            <Spinner className="h-4 w-4 mr-2" />
+                            Adding...
+                          </>
+                        ) : (
+                          "Add Website"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Git Content */}
+                {addMode === 'git' && (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
+                      <div className="h-12 w-12 rounded-lg bg-background flex items-center justify-center">
+                        <GitBranch className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Clone a repository</p>
+                        <p className="text-xs text-muted-foreground">
+                          Public repositories only. All text files will be indexed.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <Input
+                        placeholder="https://github.com/user/repo"
+                        value={gitUrlInput}
+                        onChange={(e) => {
+                          setGitUrlInput(e.target.value);
+                          setGitError(null);
+                        }}
+                        disabled={isAddingGit}
+                        className="h-11"
+                      />
+                      <Input
+                        placeholder="Branch (optional, defaults to main)"
+                        value={gitBranchInput}
+                        onChange={(e) => setGitBranchInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleAddGit();
+                        }}
+                        disabled={isAddingGit}
+                        className="h-11"
+                      />
+                      {gitError && (
+                        <p className="text-sm text-destructive">{gitError}</p>
+                      )}
+                      <Button
+                        className="w-full"
+                        onClick={handleAddGit}
+                        disabled={isAddingGit || !gitUrlInput.trim()}
+                      >
+                        {isAddingGit ? (
+                          <>
+                            <Spinner className="h-4 w-4 mr-2" />
+                            Adding...
+                          </>
+                        ) : (
+                          "Add Repository"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Text Content */}
+                {addMode === 'text' && (
+                  <div className="space-y-4 h-full flex flex-col">
+                    <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
+                      <div className="h-12 w-12 rounded-lg bg-background flex items-center justify-center">
+                        <FileText className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Paste text content</p>
+                        <p className="text-xs text-muted-foreground">
+                          Add notes, snippets, or any text content to your project
+                        </p>
+                      </div>
+                    </div>
+
+                    <Input
+                      placeholder="Title (optional)"
+                      value={textTitle}
+                      onChange={(e) => setTextTitle(e.target.value)}
+                      disabled={isAddingText}
+                      className="h-11"
+                    />
+
+                    <textarea
+                      placeholder="Paste or type your text content here..."
+                      value={textContent}
+                      onChange={(e) => {
+                        setTextContent(e.target.value);
+                        setTextError(null);
+                      }}
+                      disabled={isAddingText}
+                      className="flex-1 min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+                    />
+
+                    {textError && (
+                      <p className="text-sm text-destructive">{textError}</p>
+                    )}
+
+                    <Button
+                      className="w-full"
+                      onClick={handleAddText}
+                      disabled={isAddingText || !textContent.trim()}
+                    >
+                      {isAddingText ? (
+                        <>
+                          <Spinner className="h-4 w-4 mr-2" />
+                          Adding...
+                        </>
+                      ) : (
+                        "Add Text"
+                      )}
+                    </Button>
+                  </div>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground text-center mt-4">
-                Add existing resources from your library without re-indexing
-              </p>
-            </TabsContent>
-
-            {/* File Upload Tab */}
-            <TabsContent value="upload" className="mt-4">
-              <div
-                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                  dragActive
-                    ? "border-primary bg-primary/5"
-                    : "border-muted-foreground/25 hover:border-muted-foreground/50"
-                }`}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragActive(true);
-                }}
-                onDragLeave={(e) => {
-                  e.preventDefault();
-                  setDragActive(false);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragActive(false);
-                  handleFiles(e.dataTransfer.files, true);
-                }}
-              >
-                <UploadIcon className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground mb-2">
-                  Drag and drop files here, or
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                >
-                  {isUploading ? "Uploading..." : "Browse Files"}
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  multiple
-                  accept=".pdf,.docx,.md,.txt,.markdown,.html,.csv,.xlsx,.xls,.json,.parquet,.tsv,.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.tiff"
-                  onChange={(e) => {
-                    handleFiles(e.target.files, true);
-                    // Reset the input so the same file can be selected again
-                    e.target.value = "";
-                  }}
-                />
-                <p className="text-xs text-muted-foreground mt-4">
-                  Documents: PDF, DOCX, MD, TXT | Data: CSV, Excel, JSON | Images: PNG, JPG, GIF
-                </p>
-              </div>
-            </TabsContent>
-
-            {/* URL Tab */}
-            <TabsContent value="url" className="mt-4">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Input
-                    placeholder="https://example.com/page"
-                    value={urlInput}
-                    onChange={(e) => {
-                      setUrlInput(e.target.value);
-                      setUrlError(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handleAddUrl();
-                      }
-                    }}
-                    disabled={isAddingUrl}
-                  />
-                  {urlError && (
-                    <p className="text-sm text-destructive">{urlError}</p>
-                  )}
-                </div>
-                <Button
-                  className="w-full"
-                  onClick={handleAddUrl}
-                  disabled={isAddingUrl || !urlInput.trim()}
-                >
-                  {isAddingUrl ? (
-                    <>
-                      <Spinner className="h-4 w-4 mr-2" />
-                      Adding...
-                    </>
-                  ) : (
-                    "Add Website"
-                  )}
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  The website content will be fetched and indexed for search
-                </p>
-              </div>
-            </TabsContent>
-
-            {/* Git Repository Tab */}
-            <TabsContent value="git" className="mt-4">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Input
-                    placeholder="https://github.com/user/repo"
-                    value={gitUrlInput}
-                    onChange={(e) => {
-                      setGitUrlInput(e.target.value);
-                      setGitError(null);
-                    }}
-                    disabled={isAddingGit}
-                  />
-                  <Input
-                    placeholder="Branch (optional, uses default)"
-                    value={gitBranchInput}
-                    onChange={(e) => setGitBranchInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handleAddGit();
-                      }
-                    }}
-                    disabled={isAddingGit}
-                  />
-                  {gitError && (
-                    <p className="text-sm text-destructive">{gitError}</p>
-                  )}
-                </div>
-                <Button
-                  className="w-full"
-                  onClick={handleAddGit}
-                  disabled={isAddingGit || !gitUrlInput.trim()}
-                >
-                  {isAddingGit ? (
-                    <>
-                      <Spinner className="h-4 w-4 mr-2" />
-                      Adding...
-                    </>
-                  ) : (
-                    "Add Repository"
-                  )}
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Public repositories only. All text files will be indexed.
-                </p>
-              </div>
-            </TabsContent>
-          </Tabs>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </>

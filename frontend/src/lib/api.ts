@@ -105,6 +105,8 @@ export interface Resource {
 // Global resource with list of projects using it
 export interface GlobalResource extends Resource {
   projects: string[];  // List of project IDs using this resource
+  project_count: number;  // Number of projects using this resource
+  is_shared: boolean;  // Whether this resource is shared across projects
 }
 
 // Response from unlinking a resource
@@ -313,6 +315,20 @@ export async function addGitResource(
     body: JSON.stringify({ url, branch: branch || null }),
   });
   if (!res.ok) throw new Error("Failed to add git repository");
+  return res.json();
+}
+
+export async function addTextResource(
+  projectId: string,
+  title: string,
+  content: string
+): Promise<Resource> {
+  const res = await fetchWithAuth(`${API_BASE}/projects/${projectId}/resources/text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, content }),
+  });
+  if (!res.ok) throw new Error("Failed to add text resource");
   return res.json();
 }
 
