@@ -8,6 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV PORT=8000
+# Install Playwright browsers to a shared location accessible by non-root user
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 
 # Install system dependencies including Playwright/Chromium requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -56,7 +58,8 @@ RUN pip install --no-cache-dir -e . && \
     gunicorn \
     uvloop \
     httptools && \
-    crawl4ai-setup
+    crawl4ai-setup && \
+    chmod -R 755 /opt/browsers
 
 # Create non-root user for security with home directory (needed for Crawl4AI/Playwright)
 RUN groupadd -r akleao && useradd -r -g akleao -m -d /home/akleao akleao
