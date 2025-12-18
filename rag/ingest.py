@@ -261,7 +261,15 @@ class DocumentLoader:
             content_start = content[:8] if len(content) >= 8 else content
             is_pdf_content = content_start.startswith(b'%PDF')
 
-            if is_pdf_content or "application/pdf" in content_type or path_lower.endswith(".pdf"):
+            # If URL looks like a PDF but content isn't actually a PDF, try Playwright
+            # This handles anti-bot protection that returns HTML instead of the PDF
+            if path_lower.endswith(".pdf") and not is_pdf_content:
+                print(f"[URL Loader] Got non-PDF response for PDF URL, trying Playwright")
+                content = self._download_with_playwright(url)
+                content_start = content[:8] if len(content) >= 8 else content
+                is_pdf_content = content_start.startswith(b'%PDF')
+
+            if is_pdf_content or "application/pdf" in content_type:
                 return self._load_pdf_from_bytes(content, url)
             elif path_lower.endswith(".docx"):
                 return self._load_docx_from_bytes(content, url)
