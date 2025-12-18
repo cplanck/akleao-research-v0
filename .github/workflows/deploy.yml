@@ -75,15 +75,15 @@ jobs:
       - name: Deploy to VM
         run: |
           gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="
-            git config --global --add safe.directory /opt/akleao && \
+            sudo git config --global --add safe.directory /opt/akleao && \
             cd /opt/akleao && \
-            git pull origin main && \
-            gcloud auth configure-docker ${{ env.REGISTRY }} --quiet && \
-            docker compose -f docker-compose.prod.yml pull && \
-            docker compose -f docker-compose.prod.yml up -d --force-recreate && \
-            docker compose -f docker-compose.prod.yml exec -T api python -c 'from api.database import run_migrations; run_migrations()'
+            sudo git pull origin main && \
+            sudo gcloud auth configure-docker ${{ env.REGISTRY }} --quiet && \
+            sudo docker compose -f docker-compose.prod.yml pull && \
+            sudo docker compose -f docker-compose.prod.yml up -d --force-recreate && \
+            sudo docker compose -f docker-compose.prod.yml exec -T api python -c 'from api.database import run_migrations; run_migrations()'
           "
 
       - name: Cleanup old images on VM
         run: |
-          gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="docker image prune -f" || true
+          gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="sudo docker image prune -f" || true
