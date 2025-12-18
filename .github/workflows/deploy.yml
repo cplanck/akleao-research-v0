@@ -1,0 +1,71 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PROJECT_ID: akleao-research-v0-481218
+  REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev
+  REPOSITORY: akleao-images
+  VM_NAME: akleao-vm
+  VM_ZONE: us-central1-a
+  WORKLOAD_IDENTITY_PROVIDER: projects/27386110942/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  SERVICE_ACCOUNT: github-actions@akleao-research-v0-481218.iam.gserviceaccount.com
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push API image
+        run: |
+          docker build -f Dockerfile.prod \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-api:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-api:latest \
+            .
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-api --all-tags
+
+      - name: Build and push Celery image
+        run: |
+          docker build -f Dockerfile.prod \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-celery:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-celery:latest \
+            .
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/akleao-celery --all-tags
+
+      - name: Deploy to VM
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="
+            cd /opt/akleao && \
+            git pull origin main && \
+            gcloud auth configure-docker ${{ env.REGISTRY }} --quiet && \
+            docker compose -f docker-compose.prod.yml pull && \
+            docker compose -f docker-compose.prod.yml up -d --force-recreate && \
+            docker compose -f docker-compose.prod.yml exec -T api python -c 'from api.database import run_migrations; run_migrations()'
+          "
+
+      - name: Cleanup old images on VM
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="docker image prune -f" || true

@@ -40,9 +40,7 @@ services:
 
   # FastAPI backend
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
+    image: us-central1-docker.pkg.dev/akleao-research-v0-481218/akleao-images/akleao-api:latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -84,9 +82,7 @@ services:
 
   # Celery worker for background jobs
   celery:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
+    image: us-central1-docker.pkg.dev/akleao-research-v0-481218/akleao-images/akleao-celery:latest
     command: celery -A api.tasks worker --loglevel=info --concurrency=2
     extra_hosts:
       - "host.docker.internal:host-gateway"
