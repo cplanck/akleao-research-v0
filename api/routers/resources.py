@@ -1156,13 +1156,20 @@ async def add_url_resource(
         Resource.content_hash == content_hash
     ).first()
 
-    if existing_resource and existing_resource.status == ResourceStatus.READY:
-        # Resource already exists and is indexed - just link to this project
+    if existing_resource:
+        # Resource already exists - link to this project
         _link_resource_to_project(db, existing_resource, project_id)
+
+        # If it failed before, retry indexing
+        if existing_resource.status == ResourceStatus.FAILED:
+            existing_resource.status = ResourceStatus.PENDING
+            existing_resource.error_message = None
+            db.commit()
+            background_tasks.add_task(index_url, existing_resource.id, request.url)
+
         db.refresh(existing_resource)
-        # V4: Invalidate resource cache since project now has new resource
         invalidate_resource_cache(project_id)
-        return existing_resource
+        return resource_to_response(existing_resource)
 
     # Extract filename from URL path
     parsed = urlparse(request.url)
@@ -1223,9 +1230,17 @@ async def add_text_resource(
         Resource.content_hash == content_hash
     ).first()
 
-    if existing_resource and existing_resource.status == ResourceStatus.READY:
-        # Resource already exists and is indexed - just link to this project
+    if existing_resource:
+        # Resource already exists - link to this project
         _link_resource_to_project(db, existing_resource, project_id)
+
+        # If it failed before, retry indexing
+        if existing_resource.status == ResourceStatus.FAILED:
+            existing_resource.status = ResourceStatus.PENDING
+            existing_resource.error_message = None
+            db.commit()
+            background_tasks.add_task(index_text, existing_resource.id, request.content)
+
         db.refresh(existing_resource)
         invalidate_resource_cache(project_id)
         return resource_to_response(existing_resource)

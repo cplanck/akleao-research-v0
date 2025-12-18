@@ -32,18 +32,42 @@ class GenerateTitleRequest(BaseModel):
     message: str
 
 
-def generate_thread_title(message: str) -> str:
+def generate_thread_title(message: str, parent_title: str | None = None, context_text: str | None = None) -> str:
     """Use AI to generate a short, contextual thread title from a message.
 
     Uses Claude Haiku for fast, cheap title generation.
+
+    For subthreads, includes parent context to create titles like:
+    - "Auth Overview → Token Refresh" (parent topic → child focus)
     """
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    try:
-        response = client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=50,
-            system="""Generate a very short (2-5 words) thread title that captures what the user is asking about.
+    # Build system prompt based on whether this is a subthread
+    if parent_title:
+        system_prompt = """Generate a very short (2-5 words) subthread title that captures what the user is exploring.
+
+IMPORTANT: If there is selected text context provided, the title MUST include the key subject/topic from that context. The selected text tells you WHAT the user is asking about.
+
+Rules:
+- Include the subject matter from the selected text (e.g., "ETL", "Auth", "Redis")
+- Then add what aspect they're exploring (e.g., "Competitors", "Best Practices", "Setup")
+- Use title case
+- No punctuation at the end
+- No quotes around the title
+- Just output the title, nothing else
+
+Examples:
+- Selected: "Extract, Transform, Load" + Question: "What are other players in the field?" → "ETL Competitive Landscape"
+- Selected: "Redis caching layer" + Question: "What are the alternatives?" → "Redis Cache Alternatives"
+- Selected: "OAuth 2.0 flow" + Question: "How does refresh work?" → "OAuth Token Refresh"
+- Selected: "microservices architecture" + Question: "What are the downsides?" → "Microservices Tradeoffs"
+- No selection + Question: "Tell me more about the errors" → "Error Analysis"
+"""
+        user_content = message
+        if context_text:
+            user_content = f"Selected text: \"{context_text[:300]}\"\n\nQuestion: {message}"
+    else:
+        system_prompt = """Generate a very short (2-5 words) thread title that captures what the user is asking about.
 
 Rules:
 - Be specific to their actual question/topic
@@ -58,8 +82,15 @@ Examples:
 - "How do I set up the database?" → "Database Setup"
 - "Find errors in the logs" → "Log Errors"
 - "What's the pricing for the pro plan?" → "Pro Plan Pricing"
-""",
-            messages=[{"role": "user", "content": message}]
+"""
+        user_content = message
+
+    try:
+        response = client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=50,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}]
         )
 
         title = response.content[0].text.strip()
@@ -348,6 +379,7 @@ def auto_generate_title(
     """Generate and set a thread title based on the first user message.
 
     Uses AI to create a short, contextual title from the message content.
+    For subthreads, includes parent thread context for better titles.
     """
     # Verify project ownership
     project = db.query(Project).filter(
@@ -365,8 +397,22 @@ def auto_generate_title(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Generate title using AI
-    new_title = generate_thread_title(request.message)
+    # Get parent thread title if this is a subthread
+    parent_title = None
+    if thread.parent_thread_id:
+        parent_thread = db.query(Thread).filter(
+            Thread.id == thread.parent_thread_id,
+            Thread.deleted_at.is_(None)
+        ).first()
+        if parent_thread:
+            parent_title = parent_thread.title
+
+    # Generate title using AI (with parent context for subthreads)
+    new_title = generate_thread_title(
+        message=request.message,
+        parent_title=parent_title,
+        context_text=thread.context_text
+    )
 
     # Update thread
     thread.title = new_title
