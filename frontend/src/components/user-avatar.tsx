@@ -120,8 +120,6 @@ export function UserAvatar({ size = "md" }: UserAvatarProps) {
   // Use email for Vercel avatar
   const avatarUrl = `https://avatar.vercel.sh/${encodeURIComponent(user.email)}?size=64`;
   const displayName = user.name || user.email.split("@")[0];
-  const sizeClasses = size === "sm" ? "h-7 w-7" : "h-8 w-8";
-
   const handleLogout = async () => {
     await logout();
     router.push("/login");
@@ -130,6 +128,8 @@ export function UserAvatar({ size = "md" }: UserAvatarProps) {
   const toggleTheme = () => {
     setTheme(theme === "dark" ? "light" : "dark");
   };
+
+  const sizeClasses = size === "sm" ? "h-7 w-7" : "h-8 w-8";
 
   return (
     <DropdownMenu>

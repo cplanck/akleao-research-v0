@@ -6,6 +6,7 @@ import { ResourcePanel } from "@/components/resource-panel";
 import { FindingsDialog } from "@/components/findings-dialog";
 import { ChatInterface } from "@/components/chat-interface";
 import { UserAvatar } from "@/components/user-avatar";
+import { Menu, Plus, Folder, Home, Library, ListChecks, Lightbulb, ChevronRight, CornerDownRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -54,138 +55,6 @@ function useIsMobile(breakpoint: number = 768) {
   return isMobile;
 }
 
-// Menu icon component
-function MenuIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <line x1="4" x2="20" y1="12" y2="12" />
-      <line x1="4" x2="20" y1="6" y2="6" />
-      <line x1="4" x2="20" y1="18" y2="18" />
-    </svg>
-  );
-}
-
-// Folder icon component
-function FolderIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-    </svg>
-  );
-}
-
-// Library icon component
-function LibraryIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="m16 6 4 14" />
-      <path d="M12 6v14" />
-      <path d="M8 8v12" />
-      <path d="M4 4v16" />
-    </svg>
-  );
-}
-
-// Findings icon (lightbulb)
-function FindingsIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
-      <path d="M9 18h6" />
-      <path d="M10 22h4" />
-    </svg>
-  );
-}
-
-// Rules icon (list with checkmarks)
-function RulesIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M3.5 5.5 5 7l2.5-2.5" />
-      <path d="M3.5 11.5 5 13l2.5-2.5" />
-      <path d="M3.5 17.5 5 19l2.5-2.5" />
-      <path d="M11 6h9" />
-      <path d="M11 12h9" />
-      <path d="M11 18h9" />
-    </svg>
-  );
-}
-
-// Home icon component
-function HomeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
-      <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  );
-}
 
 // Typewriter title component for animated thread titles
 function TypewriterTitle({
@@ -230,46 +99,6 @@ function TypewriterTitle({
   return <span className="truncate">{displayedText}</span>;
 }
 
-// Chevron icon for accordion
-function ChevronIcon({ className, expanded }: { className?: string; expanded?: boolean }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""} ${className || ""}`}
-    >
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
-
-// Subthread icon
-function SubthreadIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M3 3v6a3 3 0 0 0 3 3h12" />
-      <path d="m15 8 4 4-4 4" />
-    </svg>
-  );
-}
 
 // Recursive thread item component
 function ThreadItem({
@@ -328,12 +157,12 @@ function ThreadItem({
               }}
               className="p-0.5 hover:bg-accent rounded shrink-0"
             >
-              <ChevronIcon expanded={isExpanded} className="h-3 w-3 text-muted-foreground" />
+              <ChevronRight className={`h-3 w-3 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-90" : ""}`} />
             </button>
           ) : (
             <span className="w-4 shrink-0" />
           )}
-          {isChild && <SubthreadIcon className="h-3 w-3 text-muted-foreground shrink-0 mr-1" />}
+          {isChild && <CornerDownRight className="h-3 w-3 text-muted-foreground shrink-0 mr-1" />}
           <span className={`min-w-0 truncate ${hasActiveJob ? "shimmer-text" : ""}`}>
             <TypewriterTitle
               text={thread.title}
@@ -613,11 +442,11 @@ export default function ProjectPage() {
     return (
       <div className="h-dvh bg-background flex flex-col overflow-hidden">
         {/* Mobile header */}
-        <div className="flex-shrink-0 border-b px-3 py-2 flex items-center justify-between bg-background">
+        <div className="flex-shrink-0 border-b px-3 py-2 flex items-center justify-between bg-background relative">
           <Sheet open={threadSheetOpen} onOpenChange={setThreadSheetOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-9 w-9 p-0">
-                <MenuIcon className="h-5 w-5" />
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <Menu className="h-[18px] w-[18px]" />
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-[280px] p-0">
@@ -631,7 +460,7 @@ export default function ProjectPage() {
                         className="h-8 w-8 p-0"
                         title="All Projects"
                       >
-                        <HomeIcon className="h-4 w-4" />
+                        <Home className="h-4 w-4" />
                       </Button>
                     </Link>
                     <Select
@@ -669,48 +498,41 @@ export default function ProjectPage() {
             </SheetContent>
           </Sheet>
 
-          <span className="font-semibold text-sm truncate max-w-[200px]">
+          <span className="absolute left-1/2 -translate-x-1/2 font-semibold text-sm truncate max-w-[200px]">
             {selectedThread?.title || selectedProject?.name || "Select Project"}
           </span>
 
           <div className="flex items-center gap-1">
-            {/* New thread button */}
             {selectedProject && (
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-9 w-9 p-0"
+                className="h-8 w-8 p-0"
                 onClick={handleCreateThreadAndNavigate}
                 title="New Thread"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
-                </svg>
+                <Plus className="h-[18px] w-[18px]" />
               </Button>
             )}
-            <Sheet open={resourceSheetOpen} onOpenChange={setResourceSheetOpen}>
-              <SheetTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-9 w-9 p-0 relative">
-                  <FolderIcon className="h-5 w-5" />
-                  {selectedProject && selectedProject.resources.length > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[10px] rounded-full h-4 w-4 flex items-center justify-center">
-                      {selectedProject.resources.length}
-                    </span>
-                  )}
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="w-[300px] p-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 mr-3 relative"
+              onClick={() => setResourceSheetOpen(true)}
+              title="Resources"
+            >
+              <Folder className="h-[18px] w-[18px]" />
+              {selectedProject && selectedProject.resources.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[10px] rounded-full h-4 w-4 flex items-center justify-center">
+                  {selectedProject.resources.length}
+                </span>
+              )}
+            </Button>
+            <UserAvatar size="sm" />
+          </div>
+
+          <Sheet open={resourceSheetOpen} onOpenChange={setResourceSheetOpen}>
+            <SheetContent side="right" className="w-[300px] p-0">
                 <SheetHeader className="px-3 py-2 border-b">
                   <SheetTitle className="flex items-center justify-end gap-1">
                     <Link href="/library">
@@ -720,7 +542,7 @@ export default function ProjectPage() {
                         className="h-8 w-8 p-0"
                         title="Resource Library"
                       >
-                        <LibraryIcon className="h-4 w-4" />
+                        <Library className="h-4 w-4" />
                       </Button>
                     </Link>
                     {selectedProject && (
@@ -734,7 +556,7 @@ export default function ProjectPage() {
                           setIsRulesDialogOpen(true);
                         }}
                       >
-                        <RulesIcon className="h-4 w-4" />
+                        <ListChecks className="h-4 w-4" />
                         {parseRules(selectedProject.system_instructions).length > 0 && (
                           <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[10px] rounded-full h-4 w-4 flex items-center justify-center">
                             {parseRules(selectedProject.system_instructions).length}
@@ -753,7 +575,7 @@ export default function ProjectPage() {
                           setIsFindingsDialogOpen(true);
                         }}
                       >
-                        <FindingsIcon className="h-4 w-4" />
+                        <Lightbulb className="h-4 w-4" />
                       </Button>
                     )}
                     {selectedProject && (
@@ -786,9 +608,7 @@ export default function ProjectPage() {
                   )}
                 </div>
               </SheetContent>
-            </Sheet>
-            <UserAvatar size="sm" />
-          </div>
+          </Sheet>
         </div>
 
         {/* Mobile chat area */}
@@ -891,7 +711,7 @@ export default function ProjectPage() {
                     className="h-8 w-8 p-0"
                     title="All Projects"
                   >
-                    <HomeIcon className="h-4 w-4" />
+                    <Home className="h-4 w-4" />
                   </Button>
                 </Link>
                 <Select
@@ -1025,7 +845,7 @@ export default function ProjectPage() {
                         className="h-7 w-7 p-0"
                         title="View Resource Library"
                       >
-                        <LibraryIcon className="h-4 w-4" />
+                        <Library className="h-4 w-4" />
                       </Button>
                     </Link>
                   </div>

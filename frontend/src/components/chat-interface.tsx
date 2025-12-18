@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -823,29 +823,62 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     subscribeToThread(projectId, threadId);
   }, [projectId, threadId, subscribeToThread, transformMessages]);
 
-  // Scroll to bottom when thread is first loaded (standard chat behavior)
-  // Track if user is actively in a conversation (has submitted at least once)
+  // ============================================
+  // SCROLL BEHAVIOR
+  // ============================================
+  // Two scroll behaviors:
+  // 1. Thread navigation: Scroll to bottom (see existing conversation)
+  // 2. Message send: Scroll user message to top (ChatGPT/Claude style)
+
   const isInConversationRef = useRef(false);
   const hasScrolledToBottomRef = useRef(false);
-
-  useEffect(() => {
-    // Only scroll to bottom on initial load, not during active conversation
-    if (messagesLoaded && messages.length > 0 && !hasScrolledToBottomRef.current && !isInConversationRef.current) {
-      hasScrolledToBottomRef.current = true;
-      // Small delay to ensure DOM is rendered
-      setTimeout(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
-      }, 50);
-    }
-  }, [messagesLoaded, messages.length]);
+  const pendingScrollToMessageRef = useRef<string | null>(null);
 
   // Reset flags when thread changes
   useEffect(() => {
     hasScrolledToBottomRef.current = false;
     isInConversationRef.current = false;
+    pendingScrollToMessageRef.current = null;
   }, [threadId]);
+
+  // Behavior 1: Scroll to bottom on thread navigation (initial load)
+  useLayoutEffect(() => {
+    // Skip if we're scrolling to a specific message (user just sent one)
+    if (pendingScrollToMessageRef.current) return;
+
+    // Only scroll to bottom on initial load, not during active conversation
+    if (messagesLoaded && messages.length > 0 && !hasScrolledToBottomRef.current && !isInConversationRef.current) {
+      hasScrolledToBottomRef.current = true;
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    }
+  }, [messagesLoaded, messages.length]);
+
+  // Behavior 2: Scroll user message to top when sending (ChatGPT/Claude style)
+  useLayoutEffect(() => {
+    const targetId = pendingScrollToMessageRef.current;
+    if (!targetId) return;
+
+    // Clear immediately to prevent re-triggering
+    pendingScrollToMessageRef.current = null;
+
+    const userMessageEl = document.getElementById(`message-${targetId}`);
+    const scrollContainer = scrollRef.current;
+
+    if (!userMessageEl || !scrollContainer) return;
+
+    // Get the banner height if it exists (for subthreads)
+    const banner = document.getElementById('subthread-banner');
+    const bannerHeight = banner?.offsetHeight || 0;
+
+    // Calculate target scroll position using offsetTop (relative to scroll content)
+    // We want the user message at top of visible area, below any sticky banner
+    const messageOffsetTop = userMessageEl.offsetTop;
+    const targetScroll = messageOffsetTop - bannerHeight - 24; // 24px padding
+
+    scrollContainer.scrollTo({ top: Math.max(0, targetScroll), behavior: 'instant' });
+  }, [messages]);
 
   // Handle job state snapshots from context (when subscribing to a thread)
   // This ensures the assistant message placeholder exists for active jobs
@@ -1151,21 +1184,15 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     // Mark that user is in an active conversation (prevents scroll-to-bottom on message updates)
     isInConversationRef.current = true;
 
+    // Set scroll target BEFORE state update - useLayoutEffect will handle scrolling
+    pendingScrollToMessageRef.current = tempId;
+
     // OPTIMISTIC UI: Show message immediately before API call
     setMessages((prev) => [
       ...prev,
       { id: tempId, role: "user" as const, content: question },
       { id: `assistant-${tempId}`, role: "assistant" as const, content: "", sources: [] }
     ]);
-
-    // Scroll user's message to top of viewport (like ChatGPT/Claude)
-    // scroll-margin-top on message elements handles the sticky banner offset
-    setTimeout(() => {
-      const userMessageEl = document.getElementById(`message-${tempId}`);
-      if (userMessageEl) {
-        userMessageEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      }
-    }, 50);
 
     try {
       // Create job - this saves the user message and enqueues Celery task
@@ -1219,77 +1246,34 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
       >
         {/* Sticky context banner for child threads (subthreads) */}
         {parentThreadId && (
-          <div id="subthread-banner" className="sticky top-0 z-10 border-b bg-violet-500/5 dark:bg-violet-400/5 backdrop-blur-sm bg-background/80">
-            <div className="px-4 py-2.5">
-              {/* Breadcrumb navigation */}
-              <div className="flex items-center gap-1 text-xs mb-1.5 overflow-x-auto">
-                {/* Subthread indicator icon */}
-                <svg className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                </svg>
-
-                {/* Ancestor breadcrumbs */}
-                {onNavigateToThread && ancestorThreads.length > 0 ? (
-                  <>
-                    {ancestorThreads.map((ancestor, i) => (
-                      <span key={ancestor.id} className="flex items-center gap-1 flex-shrink-0">
-                        {i > 0 && <span className="text-muted-foreground/50">›</span>}
-                        <button
-                          onClick={() => onNavigateToThread({
-                            id: ancestor.id,
-                            project_id: projectId,
-                            title: ancestor.title,
-                            created_at: "",
-                            updated_at: "",
-                            parent_thread_id: null,
-                            context_text: null,
-                            child_count: 0,
-                          } as Thread)}
-                          className="text-muted-foreground hover:text-foreground transition-colors truncate max-w-[120px]"
-                          title={ancestor.title}
-                        >
-                          {ancestor.title}
-                        </button>
-                      </span>
-                    ))}
-                    <span className="text-muted-foreground/50 flex-shrink-0">›</span>
-                    <span className="text-violet-600 dark:text-violet-400 font-medium flex-shrink-0">Current</span>
-                  </>
-                ) : onNavigateToThread ? (
-                  /* Fallback when no ancestor chain is available - just show back link */
-                  <>
-                    <button
-                      onClick={() => {
-                        onNavigateToThread({
-                          id: parentThreadId,
-                          project_id: projectId,
-                          title: "",
-                          created_at: "",
-                          updated_at: "",
-                          parent_thread_id: null,
-                          context_text: null,
-                          child_count: 0,
-                        } as Thread);
-                      }}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      Parent thread
-                    </button>
-                    <span className="text-muted-foreground/50">›</span>
-                    <span className="text-violet-600 dark:text-violet-400 font-medium">Current</span>
-                  </>
-                ) : (
-                  <span className="text-violet-600 dark:text-violet-400 font-medium">Deep Dive</span>
-                )}
-              </div>
-
-              {/* Context text - what the user is exploring */}
-              {contextText && (
-                <div className="text-sm text-foreground/80 italic line-clamp-2 pl-5 border-l-2 border-violet-500/30 dark:border-violet-400/30">
-                  "{contextText}"
-                </div>
-              )}
-            </div>
+          <div id="subthread-banner" className="sticky top-0 z-10 border-b bg-muted/50 backdrop-blur-sm">
+            <button
+              onClick={() => {
+                if (!onNavigateToThread) return;
+                // Navigate to immediate parent (last ancestor) or parentThreadId
+                const parent = ancestorThreads.length > 0
+                  ? ancestorThreads[ancestorThreads.length - 1]
+                  : { id: parentThreadId, title: "" };
+                onNavigateToThread({
+                  id: parent.id,
+                  project_id: projectId,
+                  title: parent.title,
+                  created_at: "",
+                  updated_at: "",
+                  parent_thread_id: null,
+                  context_text: null,
+                  child_count: 0,
+                } as Thread);
+              }}
+              className="w-full px-3 md:px-4 py-2 flex items-center gap-2 text-left text-sm text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+            >
+              <svg className="w-4 h-4 flex-shrink-0 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+              <span className="line-clamp-1">
+                {contextText ? `"${contextText}"` : "Back to parent thread"}
+              </span>
+            </button>
           </div>
         )}
 
@@ -1339,7 +1323,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                       : ""
                   }`}
                 >
-                  <div className="text-sm">
+                  <div className="text-base">
                     {message.role === "assistant" ? (
                       <>
                         {/* 1. Status panel - shows acknowledgment first, then activity log */}

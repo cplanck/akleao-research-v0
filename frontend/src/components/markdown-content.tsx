@@ -540,16 +540,16 @@ export function MarkdownContent({ content, onAddUrl, isStreaming = false }: Mark
       );
     },
     p({ children }) {
-      return <p className="mb-3 last:mb-0">{children}</p>;
+      return <p className="mb-4 md:mb-6 last:mb-0">{children}</p>;
     },
     ul({ children }) {
-      return <ul className="list-disc pl-4 mb-2">{children}</ul>;
+      return <ul className="list-disc pl-5 mb-4 md:mb-6 space-y-2">{children}</ul>;
     },
     ol({ children }) {
-      return <ol className="list-decimal pl-4 mb-2">{children}</ol>;
+      return <ol className="list-decimal pl-5 mb-4 md:mb-6 space-y-2">{children}</ol>;
     },
     li({ children }) {
-      return <li className="mb-1">{children}</li>;
+      return <li>{children}</li>;
     },
     h1({ children }) {
       return <h1 className="text-lg font-bold mb-2">{children}</h1>;
