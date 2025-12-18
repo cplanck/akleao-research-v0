@@ -1,31 +1,47 @@
 # Production Dockerfile for Akleao Research API and Celery worker
-# Multi-stage build for smaller image size
+# Single-stage build (Playwright browsers can't be easily copied between stages)
 
-# ============================================================================
-# Stage 1: Builder - Install dependencies
-# ============================================================================
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV PORT=8000
 
-# Install build dependencies
+# Install system dependencies including Playwright/Chromium requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
     libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+    # Playwright/Chromium dependencies
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 WORKDIR /app
 
 # Install Python dependencies
 COPY pyproject.toml ./
 
-# Install dependencies to a local directory for copying later
-RUN pip install --no-cache-dir --prefix=/install -e . && \
-    pip install --no-cache-dir --prefix=/install \
+# Install all dependencies including Crawl4AI and run browser setup
+RUN pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir \
     celery \
     redis \
     tavily-python \
@@ -34,44 +50,22 @@ RUN pip install --no-cache-dir --prefix=/install -e . && \
     openpyxl \
     websockets \
     email-validator \
+    beautifulsoup4 \
+    crawl4ai \
+    curl_cffi \
     gunicorn \
     uvloop \
-    httptools
-
-# ============================================================================
-# Stage 2: Runtime - Production image
-# ============================================================================
-FROM python:3.13-slim AS runtime
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
-ENV PORT=8000
-
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    httptools && \
+    crawl4ai-setup
 
 # Create non-root user for security
 RUN groupadd -r akleao && useradd -r -g akleao akleao
 
-# Copy installed Python packages from builder
-COPY --from=builder /install /usr/local
-
-# Set work directory
-WORKDIR /app
-
 # Copy application code
 COPY --chown=akleao:akleao api/ ./api/
 COPY --chown=akleao:akleao rag/ ./rag/
-COPY --chown=akleao:akleao pyproject.toml ./
 
-# Create directories for uploads and data (if using local storage in dev)
+# Create directories for uploads and data
 RUN mkdir -p uploads repos && chown -R akleao:akleao uploads repos
 
 # Switch to non-root user

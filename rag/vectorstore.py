@@ -69,16 +69,22 @@ class VectorStore:
         vectors = []
 
         for chunk, embedding in zip(chunks, embeddings):
+            # Build metadata, filtering out None values (Pinecone doesn't accept nulls)
+            metadata = {
+                "content": chunk.content,
+                "source": chunk.source,
+                "doc_id": chunk.doc_id,
+                "chunk_index": chunk.chunk_index,
+            }
+            # Add chunk metadata, excluding None values
+            for key, value in chunk.metadata.items():
+                if value is not None:
+                    metadata[key] = value
+
             vectors.append({
                 "id": chunk.id,
                 "values": embedding,
-                "metadata": {
-                    "content": chunk.content,
-                    "source": chunk.source,
-                    "doc_id": chunk.doc_id,
-                    "chunk_index": chunk.chunk_index,
-                    **chunk.metadata
-                }
+                "metadata": metadata
             })
 
         # Pinecone recommends batches of 100

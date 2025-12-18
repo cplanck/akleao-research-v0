@@ -204,57 +204,104 @@ class DocumentLoader:
         """Load plain text or markdown file."""
         return file_path.read_text(encoding="utf-8")
 
-    def load_url(self, url: str) -> Document:
-        """Load document from a URL. Supports PDFs and webpages."""
+    def load_url(self, url: str, use_crawl4ai: bool = True) -> Document:
+        """Load document from a URL. Supports PDFs and webpages.
+
+        Args:
+            url: The URL to load
+            use_crawl4ai: If True, use Crawl4AI for webpages (handles JS, anti-bot).
+                          Falls back to BeautifulSoup if Crawl4AI fails.
+        """
         parsed = urlparse(url)
         if not parsed.scheme in ("http", "https"):
             raise ValueError(f"Invalid URL scheme: {parsed.scheme}")
 
-        # Download the content with browser-like headers
-        # Note: Don't set Accept-Encoding manually - requests handles gzip/deflate
-        # automatically. Setting 'br' (Brotli) causes issues since requests doesn't
-        # natively support it, leading to garbled content.
+        # First, do a HEAD request to check content type without downloading
+        # This helps us route PDFs/docs correctly without loading them in Playwright
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,application/pdf,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Connection": "keep-alive",
         }
+
+        path_lower = parsed.path.lower()
+
+        # Check if URL clearly points to a non-HTML document
+        is_likely_document = (
+            path_lower.endswith(".pdf") or
+            path_lower.endswith(".docx") or
+            path_lower.endswith((".md", ".markdown")) or
+            path_lower.endswith(".txt")
+        )
+
+        # For documents, use the traditional requests-based approach
+        # with Playwright fallback for anti-bot protected sites
+        if is_likely_document:
+            content = None
+            content_type = ""
+
+            # Try requests first
+            try:
+                response = requests.get(url, timeout=60, headers=headers)
+                response.raise_for_status()
+                content = response.content
+                content_type = response.headers.get("Content-Type", "").lower()
+            except requests.exceptions.HTTPError as e:
+                # If we get 403/401, try Playwright as fallback
+                if e.response.status_code in (401, 403, 406, 429):
+                    print(f"[URL Loader] Got {e.response.status_code}, trying Playwright for document download")
+                    content = self._download_with_playwright(url)
+                else:
+                    raise
+
+            if content is None:
+                raise Exception(f"Failed to download document from {url}")
+
+            content_start = content[:8] if len(content) >= 8 else content
+            is_pdf_content = content_start.startswith(b'%PDF')
+
+            if is_pdf_content or "application/pdf" in content_type or path_lower.endswith(".pdf"):
+                return self._load_pdf_from_bytes(content, url)
+            elif path_lower.endswith(".docx"):
+                return self._load_docx_from_bytes(content, url)
+            elif path_lower.endswith((".md", ".markdown")):
+                return Document(
+                    content=content.decode('utf-8'),
+                    source=url,
+                    doc_type="markdown",
+                    metadata={"url": url}
+                )
+            elif path_lower.endswith(".txt"):
+                return Document(
+                    content=content.decode('utf-8'),
+                    source=url,
+                    doc_type="text",
+                    metadata={"url": url}
+                )
+
+        # For webpages, try Crawl4AI first (handles JS, bypasses anti-bot)
+        if use_crawl4ai:
+            try:
+                print(f"[URL Loader] Trying Crawl4AI for {url}")
+                return self._load_webpage_with_crawl4ai(url)
+            except Exception as e:
+                print(f"[URL Loader] Crawl4AI failed, falling back to BeautifulSoup: {e}")
+
+        # Fallback: use requests + BeautifulSoup
         response = requests.get(url, timeout=60, headers=headers)
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "").lower()
-        path_lower = parsed.path.lower()
-
-        # Check actual content magic bytes for more reliable detection
         content_start = response.content[:8] if len(response.content) >= 8 else response.content
         is_pdf_content = content_start.startswith(b'%PDF')
-        is_html_content = content_start.lstrip().lower().startswith((b'<!doc', b'<html', b'<head'))
 
-        # Determine file type - prioritize actual content over URL/headers
-        if is_pdf_content:
+        # Check if we got a PDF even though URL didn't indicate it
+        if is_pdf_content or "application/pdf" in content_type:
             return self._load_pdf_from_bytes(response.content, url)
-        elif "application/pdf" in content_type and not is_html_content:
-            return self._load_pdf_from_bytes(response.content, url)
-        elif path_lower.endswith(".docx") and not is_html_content:
-            return self._load_docx_from_bytes(response.content, url)
-        elif path_lower.endswith((".md", ".markdown")) and not is_html_content:
-            return Document(
-                content=response.text,
-                source=url,
-                doc_type="markdown",
-                metadata={"url": url}
-            )
-        elif path_lower.endswith(".txt") and not is_html_content:
-            return Document(
-                content=response.text,
-                source=url,
-                doc_type="text",
-                metadata={"url": url}
-            )
-        else:
-            # Assume HTML webpage - extract text
-            return self._load_webpage(response.text, url)
+
+        # Parse as HTML
+        return self._load_webpage(response.text, url)
 
     def _load_pdf_from_bytes(self, content: bytes, source: str) -> Document:
         """Extract text from PDF bytes using Docling for better table/image handling."""
@@ -340,7 +387,7 @@ class DocumentLoader:
         )
 
     def _load_webpage(self, html: str, source: str) -> Document:
-        """Extract text content from HTML webpage."""
+        """Extract text content from HTML webpage using BeautifulSoup (fallback)."""
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(html, "html.parser")
@@ -362,6 +409,86 @@ class DocumentLoader:
             source=source,
             doc_type="webpage",
             metadata={"url": source, "title": title}
+        )
+
+    def _download_with_playwright(self, url: str) -> bytes:
+        """Download a file using curl_cffi with browser TLS impersonation.
+
+        Used as fallback when requests.get() gets 403/401 errors.
+        curl_cffi impersonates real browser TLS fingerprints to bypass anti-bot.
+        """
+        from curl_cffi import requests as curl_requests
+
+        print(f"[Anti-bot] Downloading {url} with Chrome TLS impersonation...")
+
+        # curl_cffi can impersonate real browser TLS fingerprints
+        # This bypasses TLS fingerprinting that detects Python requests
+        response = curl_requests.get(
+            url,
+            impersonate="chrome120",  # Impersonate Chrome 120
+            timeout=120,
+            headers={
+                "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
+
+        if response.status_code >= 400:
+            raise Exception(f"curl_cffi got {response.status_code}")
+
+        print(f"[Anti-bot] Successfully downloaded {len(response.content)} bytes")
+        return response.content
+
+    def _load_webpage_with_crawl4ai(self, url: str) -> Document:
+        """Extract text content from webpage using Crawl4AI (handles JS, anti-bot).
+
+        Crawl4AI uses Playwright to render JavaScript and has stealth features
+        to bypass common anti-scraping mechanisms.
+        """
+        import asyncio
+
+        async def crawl():
+            from crawl4ai import AsyncWebCrawler
+            from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
+
+            browser_config = BrowserConfig(
+                headless=True,
+                verbose=False,
+            )
+            run_config = CrawlerRunConfig(
+                word_count_threshold=10,  # Filter out very short content blocks
+                exclude_external_links=True,
+                remove_overlay_elements=True,  # Remove popups/modals
+                process_iframes=False,  # Skip iframes for speed
+            )
+
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                result = await crawler.arun(url=url, config=run_config)
+
+                if not result.success:
+                    raise Exception(f"Crawl4AI failed: {result.error_message}")
+
+                return result
+
+        # Run the async crawler
+        result = asyncio.run(crawl())
+
+        # Extract title from metadata if available
+        title = None
+        if hasattr(result, 'metadata') and result.metadata:
+            title = result.metadata.get('title')
+
+        # Use markdown content (cleaner for RAG) or fall back to cleaned HTML
+        content = result.markdown if result.markdown else result.cleaned_html
+
+        if not content or len(content.strip()) < 50:
+            raise Exception("Crawl4AI returned empty or very short content")
+
+        return Document(
+            content=content,
+            source=url,
+            doc_type="webpage",
+            metadata={"url": url, "title": title, "crawler": "crawl4ai"}
         )
 
     def load_git_repository(
