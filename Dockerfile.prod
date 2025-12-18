@@ -58,8 +58,8 @@ RUN pip install --no-cache-dir -e . && \
     httptools && \
     crawl4ai-setup
 
-# Create non-root user for security
-RUN groupadd -r akleao && useradd -r -g akleao akleao
+# Create non-root user for security with home directory (needed for Crawl4AI/Playwright)
+RUN groupadd -r akleao && useradd -r -g akleao -m -d /home/akleao akleao
 
 # Copy application code
 COPY --chown=akleao:akleao api/ ./api/
