@@ -57,8 +57,7 @@ RUN pip install --no-cache-dir -e . && \
     curl_cffi \
     gunicorn \
     uvloop \
-    httptools \
-    docling && \
+    httptools && \
     crawl4ai-setup && \
     chmod -R 755 /opt/browsers
 
