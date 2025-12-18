@@ -64,6 +64,7 @@ jobs:
       - name: Deploy to VM
         run: |
           gcloud compute ssh ${{ env.VM_NAME }} --zone=${{ env.VM_ZONE }} --command="
+            git config --global --add safe.directory /opt/akleao && \
             cd /opt/akleao && \
             git pull origin main && \
             gcloud auth configure-docker ${{ env.REGISTRY }} --quiet && \
