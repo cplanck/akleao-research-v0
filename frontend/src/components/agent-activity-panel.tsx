@@ -167,12 +167,14 @@ export function AgentActivityPanel({
           : "opacity-0 translate-y-4 pointer-events-none"
       }`}
     >
-      {/* Drawer container - subtle muted background for distinction */}
-      <div className="bg-muted/50 dark:bg-muted/30 border border-border border-b-0 rounded-t-xl overflow-hidden backdrop-blur-sm">
+      {/* Drawer container - tucked behind input, extra padding when expanded for overlap */}
+      <div className={`bg-muted/50 dark:bg-muted/30 border border-border rounded-xl overflow-hidden backdrop-blur-sm transition-all duration-300 ${
+        isExpanded ? "pb-4" : ""
+      }`}>
         {/* Header - clickable to expand/collapse */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted/50 transition-colors font-mono text-xs"
+          className="w-full flex items-center gap-3 px-3 py-1.5 hover:bg-muted/50 transition-colors font-mono text-xs"
         >
           {/* Status indicator */}
           {isActive ? (
@@ -201,56 +203,58 @@ export function AgentActivityPanel({
           )}
         </button>
 
-        {/* Expandable content area */}
-        <div
-          className={`overflow-hidden transition-all duration-300 ease-out ${
-            isExpanded ? "max-h-52 opacity-100" : "max-h-0 opacity-0"
-          }`}
-        >
-          <div className="px-3 pb-3 pt-1 space-y-1.5 font-mono text-xs">
-            {/* Acknowledgment */}
-            {acknowledgment && (
-              <div className="text-muted-foreground/80 pl-5 leading-relaxed">
-                {acknowledgment}
-              </div>
-            )}
-
-            {/* Tool calls list */}
-            {toolCalls.map((tool, idx) => {
-              const statusInfo = getStatusIndicator(tool.status);
-              const toolName = getToolConfig(tool.tool || tool.name || "").displayName;
-
-              return (
-                <div key={tool.id || idx} className="flex items-start gap-2 leading-relaxed">
-                  <span className={`w-4 text-center flex-shrink-0 ${statusInfo.className}`}>
-                    {statusInfo.symbol}
-                  </span>
-                  <div className="flex-1 min-w-0 text-foreground/80">
-                    <span className="text-foreground/90">{toolName}</span>
-                    {tool.query && (
-                      <span className="text-muted-foreground"> "{tool.query}"</span>
-                    )}
-                    {tool.found !== null && tool.found !== undefined && (
-                      <span className={tool.found === 0 ? "text-amber-400" : "text-muted-foreground"}>
-                        {" → "}{tool.found} result{tool.found !== 1 ? "s" : ""}
-                      </span>
-                    )}
-                    {tool.duration_ms && (
-                      <span className="text-muted-foreground/50"> {tool.duration_ms}ms</span>
-                    )}
-                  </div>
+        {/* Expandable content area - only render if there's content to show */}
+        {(toolCalls.length > 0 || acknowledgment || isActive) && (
+          <div
+            className={`overflow-hidden transition-all duration-300 ease-out ${
+              isExpanded ? "max-h-52 opacity-100" : "max-h-0 opacity-0"
+            }`}
+          >
+            <div className="px-3 pb-3 pt-1 space-y-1.5 font-mono text-xs">
+              {/* Acknowledgment */}
+              {acknowledgment && (
+                <div className="text-muted-foreground/80 pl-5 leading-relaxed">
+                  {acknowledgment}
                 </div>
-              );
-            })}
+              )}
 
-            {/* Empty state */}
-            {toolCalls.length === 0 && !acknowledgment && isActive && (
-              <div className="text-muted-foreground/60 pl-5">
-                Waiting...
-              </div>
-            )}
+              {/* Tool calls list */}
+              {toolCalls.map((tool, idx) => {
+                const statusInfo = getStatusIndicator(tool.status);
+                const toolName = getToolConfig(tool.tool || tool.name || "").displayName;
+
+                return (
+                  <div key={tool.id || idx} className="flex items-start gap-2 leading-relaxed">
+                    <span className={`w-4 text-center flex-shrink-0 ${statusInfo.className}`}>
+                      {statusInfo.symbol}
+                    </span>
+                    <div className="flex-1 min-w-0 text-foreground/80">
+                      <span className="text-foreground/90">{toolName}</span>
+                      {tool.query && (
+                        <span className="text-muted-foreground"> "{tool.query}"</span>
+                      )}
+                      {tool.found !== null && tool.found !== undefined && (
+                        <span className={tool.found === 0 ? "text-amber-400" : "text-muted-foreground"}>
+                          {" → "}{tool.found} result{tool.found !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                      {tool.duration_ms && (
+                        <span className="text-muted-foreground/50"> {tool.duration_ms}ms</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Empty state - only when active */}
+              {toolCalls.length === 0 && !acknowledgment && isActive && (
+                <div className="text-muted-foreground/60 pl-5">
+                  Waiting...
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -1150,8 +1150,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
           <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-background via-background to-transparent pt-6">
-              {/* Agent activity panel - positioned above input */}
-              <div className="mb-1">
+              {/* Agent activity panel - inset and tucked behind input */}
+              <div className="mx-2 sm:mx-3 -mb-2 relative z-0">
                 <AgentActivityPanel
                   isActive={isLoading}
                   activityLog={activityLog}
@@ -1161,8 +1161,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                   tokenCount={tokenCount}
                 />
               </div>
-              {/* Input container */}
-              <div className="border border-border bg-card shadow-sm overflow-hidden rounded-xl">
+              {/* Input container - higher z-index to appear above drawer */}
+              <div className="relative z-10 border border-border bg-card shadow-sm overflow-hidden rounded-xl">
                 {/* Single row input on mobile, two rows on desktop */}
                 <div className="flex items-end gap-1.5 p-1.5 sm:p-2 sm:pb-0">
                   <Textarea
@@ -1180,7 +1180,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                     rows={1}
                   />
                   {/* Mobile: Icon buttons inline */}
-                  <div className="flex items-center gap-1 sm:hidden pb-0.5">
+                  <div className="flex items-center gap-1 sm:hidden">
                     <Popover>
                       <PopoverTrigger asChild>
                         <button
@@ -1263,7 +1263,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                   </div>
                 </div>
                 {/* Desktop: Full action buttons row */}
-                <div className="hidden sm:flex items-center justify-between px-2 pb-2">
+                <div className="hidden sm:flex items-center justify-between px-2 py-1.5">
                   <button
                     onClick={() => setContextOnly(!contextOnly)}
                     className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
@@ -1295,15 +1295,15 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                     onClick={handleSubmit}
                     disabled={isLoading || !input.trim()}
                     size="sm"
-                    className={`h-8 w-8 p-0 shrink-0 ${isRespondMode ? "bg-violet-600 hover:bg-violet-700 text-white" : ""}`}
-                    title={isRespondMode ? "Reply" : "Send"}
+                    className={`h-8 px-3 gap-1.5 shrink-0 ${isRespondMode ? "bg-violet-600 hover:bg-violet-700 text-white" : ""}`}
                   >
+                    {isRespondMode ? "Reply" : "Send"}
                     {isRespondMode ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                       </svg>
                     ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                       </svg>
                     )}
