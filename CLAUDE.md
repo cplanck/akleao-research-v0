@@ -83,6 +83,35 @@ gcloud compute ssh akleao-vm --zone=us-central1-a --command="
 - The `api/storage.py` handles storage backend detection automatically
 - Migrations run automatically on API startup via `init_db()`
 
+## Chat UI Architecture (frontend/src/components/chat-interface.tsx)
+
+The chat interface uses a specific layout pattern to prevent scroll issues:
+
+**Layout Structure:**
+```
+Container (relative, h-full)
+├── Messages Area (absolute inset-0, overflow-y-auto, pb-24)
+│   └── Messages with padding
+└── Input Area (absolute bottom-0 left-0 right-0)
+    ├── Agent Activity Drawer (floats above input)
+    └── Text Input
+```
+
+**Critical Design Decisions:**
+1. **Messages area is `absolute inset-0`** - fills entire container, scrolls independently
+2. **Input area is `absolute bottom-0`** - floats over messages, completely out of document flow
+3. **Input/drawer can NEVER affect scroll** - they're absolutely positioned, not in flex layout
+
+**Scroll Behavior (when user sends message):**
+- Use `getBoundingClientRect()` for accurate scroll positioning (not `offsetTop` or `scrollIntoView`)
+- Calculate exact scroll position accounting for banner (subthreads) and top padding
+- Scroll happens in `useLayoutEffect` synchronously before paint
+
+**Why this matters:**
+- Previous flex-based layout caused scroll jumps when drawer animated
+- `scrollIntoView` caused small layout shifts due to `scrollMarginTop`
+- Direct `scrollTop` assignment with `getBoundingClientRect()` is pixel-perfect
+
 ## GCP Project Info
 
 - **Project ID**: `akleao-research-v0-481218`

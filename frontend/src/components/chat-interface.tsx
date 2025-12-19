@@ -20,9 +20,10 @@ import { Input } from "@/components/ui/input";
 import { MarkdownContent } from "@/components/markdown-content";
 import { SourceInfo, listMessages, addUrlResource, getResourceFileUrl, Resource, generateThreadTitle, createFinding, createChildThread, Thread, ChildThreadInfo, createJob, getActiveJob, startJob } from "@/lib/api";
 import { TextSelectionMenu } from "@/components/text-selection-menu";
+import { AgentActivityPanel } from "@/components/agent-activity-panel";
 import { useProject } from "@/contexts/project-context";
 import { ActivityItem } from "@/lib/app-websocket";
-import { getToolConfig, formatToolStatus } from "@/lib/tool-registry";
+import { getToolConfig } from "@/lib/tool-registry";
 import { toast } from "sonner";
 
 // Dynamically import PdfViewer to avoid SSR issues
@@ -94,87 +95,6 @@ interface ViewingSource {
   filename: string;
 }
 
-// Agent phases - reflects what the agent is actually doing
-type AgentPhase =
-  | "initializing"    // Just started, waiting for first response
-  | "planning"        // Got acknowledgment, figuring out approach
-  | "searching"       // Actively searching (handled separately in UI)
-  | "processing"      // Got search results, making sense of them
-  | "thinking"        // Extended thinking / deep reasoning
-  | "synthesizing"    // Combining information, forming response
-  | "cooking"         // Been working for a while (>15s)
-  | "finishing";      // About to deliver response
-
-// Verb bins by phase - larger pools with some overlap for variety
-const PHASE_VERBS: Record<AgentPhase, string[]> = {
-  // Big diverse pool for initial state - this is what users see first
-  initializing: [
-    "Warming up", "Tuning in", "Spinning up", "Booting up",
-    "Getting ready", "Firing up", "Revving up", "Gearing up",
-    "Powering on", "Dialing in", "Locking in", "Zeroing in",
-  ],
-  planning: [
-    "Sizing up", "Scoping", "Charting", "Mapping out",
-    "Strategizing", "Plotting", "Scheming", "Game planning",
-  ],
-  searching: [], // Uses specific "Searching X" UI instead
-  processing: [
-    "Discombobulating", "Digesting", "Crunching", "Parsing", "Unpacking",
-    "Decoding", "Untangling", "Sifting through", "Making sense of",
-  ],
-  thinking: [
-    "Mulling", "Pondering", "Contemplating", "Reasoning",
-    "Noodling", "Ruminating", "Deliberating", "Musing",
-  ],
-  synthesizing: [
-    "Vibing", "Connecting dots", "Weaving", "Piecing together",
-    "Assembling", "Crystallizing", "Distilling", "Coalescing",
-  ],
-  cooking: [
-    "Cooking", "Brewing", "Simmering", "Marinating",
-    "Stewing", "Percolating", "Slow cooking",
-  ],
-  finishing: [
-    "Polishing", "Wrapping up", "Finalizing", "Tidying up",
-    "Putting finishing touches", "Almost there",
-  ],
-};
-
-// Wildcard verbs that can appear in any phase (adds unpredictability)
-const WILDCARD_VERBS = [
-  "Vibing", "Cooking", "Working", "Thinking", "Processing",
-  "Humming along", "Chugging along", "On it",
-];
-
-// Get verb for a specific phase with some randomness
-function getPhaseVerb(phase: AgentPhase, seed: number = 0): string {
-  // 15% chance to use a wildcard verb for variety
-  if (Math.random() < 0.15) {
-    return WILDCARD_VERBS[Math.floor(Math.random() * WILDCARD_VERBS.length)];
-  }
-
-  const verbs = PHASE_VERBS[phase];
-  if (!verbs || verbs.length === 0) return "Working";
-
-  // Use seed + random offset for less predictability
-  const randomOffset = Math.floor(Math.random() * verbs.length);
-  const index = (seed + randomOffset) % verbs.length;
-  return verbs[index];
-}
-
-// Format token count (e.g., 1234 -> "1.2k", 12345 -> "12.3k")
-function formatTokenCount(count: number): string {
-  if (count < 1000) return count.toString();
-  return (count / 1000).toFixed(1) + "k";
-}
-
-// Format elapsed time (e.g., 5.2 -> "5.2s", 65.3 -> "1:05")
-function formatElapsedTime(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
 
 // Activity log item with timestamp for animations
 interface ActivityLogItem {
@@ -236,309 +156,6 @@ function ThinkingDisplay({ content, isStreaming }: { content: string; isStreamin
   );
 }
 
-// Animated dots component
-function AnimatedDots() {
-  return (
-    <span className="inline-flex gap-0.5 ml-0.5">
-      <span className="w-1 h-1 bg-violet-500 dark:bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-      <span className="w-1 h-1 bg-violet-500 dark:bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-      <span className="w-1 h-1 bg-violet-500 dark:bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-    </span>
-  );
-}
-
-// Claude Code-style status panel with activity log flowing upward
-interface AgentStatusPanelProps {
-  activityLog: ActivityLogItem[];
-  isThinking: boolean;
-  thinkingContent: string;
-  currentAction: "idle" | "thinking" | "searching" | "responding";
-  resourceNames?: string[];
-  elapsedTime?: number;  // Elapsed time in seconds
-  tokenCount?: number;   // Total tokens used
-  acknowledgment?: string;  // Plan acknowledgment from router
-  hasContent?: boolean;  // Whether we've started receiving real content
-}
-
-// Compute agent phase from current state
-function computeAgentPhase(
-  acknowledgment: string | undefined,
-  activityLog: ActivityLogItem[],
-  isThinking: boolean,
-  currentAction: string,
-  elapsedTime: number,
-  hasContent: boolean
-): AgentPhase {
-  // Long-running override (>15s and still working)
-  if (elapsedTime > 15 && !hasContent) {
-    return "cooking";
-  }
-
-  // Extended thinking mode
-  if (isThinking) {
-    return "thinking";
-  }
-
-  // Check tool call status
-  const lastToolCall = [...activityLog].reverse().find(a => a.type === "tool_call");
-  const lastToolResult = [...activityLog].reverse().find(a => a.type === "tool_result");
-  const hasActiveSearch = lastToolCall && (!lastToolResult || lastToolResult.timestamp < lastToolCall.timestamp);
-  const hasCompletedSearch = lastToolResult && lastToolResult.type === "tool_result";
-
-  // Active search in progress
-  if (hasActiveSearch) {
-    return "searching";
-  }
-
-  // Got search results, processing them
-  if (hasCompletedSearch && !hasContent) {
-    // If we've been processing results for a bit, we're synthesizing
-    const timeSinceResult = Date.now() - lastToolResult.timestamp;
-    if (timeSinceResult > 2000) {
-      return "synthesizing";
-    }
-    return "processing";
-  }
-
-  // Have acknowledgment but no searches yet - planning phase
-  if (acknowledgment && activityLog.length === 0) {
-    return "planning";
-  }
-
-  // About to finish (have content coming)
-  if (hasContent) {
-    return "finishing";
-  }
-
-  // Initial state - just started
-  return "initializing";
-}
-
-function AgentStatusPanel({
-  activityLog,
-  isThinking,
-  thinkingContent,
-  currentAction,
-  resourceNames = [],
-  elapsedTime = 0,
-  tokenCount,
-  acknowledgment,
-  hasContent = false,
-}: AgentStatusPanelProps) {
-  // Compute current phase
-  const phase = computeAgentPhase(
-    acknowledgment,
-    activityLog,
-    isThinking,
-    currentAction,
-    elapsedTime,
-    hasContent
-  );
-
-  // Track phase changes to pick new verb only when phase changes
-  const [currentVerb, setCurrentVerb] = useState(() => getPhaseVerb("initializing", 0));
-  const lastPhaseRef = useRef<AgentPhase>("initializing");
-
-  useEffect(() => {
-    if (phase !== lastPhaseRef.current) {
-      // Phase changed - pick a new random verb for this phase
-      const seed = Math.floor(Math.random() * 100);
-      setCurrentVerb(getPhaseVerb(phase, seed));
-      lastPhaseRef.current = phase;
-    }
-  }, [phase]);
-
-  // Get current action display using tool registry
-  const getCurrentActionDisplay = () => {
-    const lastToolCall = [...activityLog].reverse().find(a => a.type === "tool_call");
-    const lastToolResult = [...activityLog].reverse().find(a => a.type === "tool_result");
-
-    // If we have a pending tool call (no result yet), show appropriate status
-    if (lastToolCall && (!lastToolResult || lastToolResult.timestamp < lastToolCall.timestamp)) {
-      const toolId = lastToolCall.tool || lastToolCall.name || "unknown";
-      const config = getToolConfig(toolId);
-
-      // For search_documents, customize with resource names if available
-      let text = formatToolStatus(toolId, "in_progress", {
-        query: lastToolCall.query,
-        resource: lastToolCall.query?.split(":")[0],
-      });
-
-      // Override for documents to include resource name
-      if (toolId === "search_documents" && resourceNames.length === 1) {
-        text = `Searching ${resourceNames[0]} for '${lastToolCall.query || ""}'`.replace(" for ''", "");
-      }
-
-      return {
-        type: "searching",
-        icon: config.icon,
-        text,
-        subtext: null, // Query already included in text via formatToolStatus
-      };
-    }
-
-    // If actively thinking (extended thinking mode) - show as a distinct step
-    if (isThinking) {
-      return {
-        type: "thinking",
-        icon: "◇",
-        text: "Thinking",
-        subtext: null,
-      };
-    }
-
-    // If thinking/processing (but no acknowledgment yet) - initial state
-    if ((currentAction === "thinking" || currentAction === "responding") && !acknowledgment) {
-      return {
-        type: "processing",
-        icon: "✦",
-        text: currentVerb,
-        subtext: null,
-      };
-    }
-
-    return null;
-  };
-
-  const action = getCurrentActionDisplay();
-
-  // Once we have real content, hide the status panel entirely
-  if (hasContent) return null;
-
-  // Don't render if nothing to show
-  if (!action && activityLog.length === 0 && !acknowledgment) return null;
-
-  return (
-    <div className="text-sm">
-      {/* Acknowledgment from router - THE MAIN THING the user sees first */}
-      {acknowledgment && (
-        <div className="mb-3">
-          <p className="text-foreground">
-            {acknowledgment}
-          </p>
-        </div>
-      )}
-
-      {/* Activity log - shows what we're doing */}
-      {activityLog.length > 0 && (
-        <div className="space-y-1 mb-2 text-xs font-mono">
-          {activityLog.map((item) => {
-            const isRecent = Date.now() - item.timestamp < 5000;
-            const opacity = isRecent ? "opacity-70" : "opacity-50";
-
-            if (item.type === "tool_call") {
-              // Show tool call in progress (only if no result yet)
-              const hasResult = activityLog.some(
-                a => a.type === "tool_result" && a.tool === item.name
-              );
-              if (hasResult) return null; // Don't show if already completed
-
-              const toolId = item.name || item.tool || "unknown";
-              const config = getToolConfig(toolId);
-              const statusText = formatToolStatus(toolId, "in_progress", {
-                query: item.query,
-                resource: item.query?.split(":")[0],
-              });
-
-              return (
-                <div
-                  key={item.id}
-                  className="flex items-center gap-1.5 text-muted-foreground opacity-70"
-                >
-                  <span className="animate-pulse text-blue-500">{config.icon}</span>
-                  <span className="truncate max-w-[300px]">{statusText}</span>
-                  <AnimatedDots />
-                </div>
-              );
-            }
-
-            if (item.type === "tool_result") {
-              const toolId = item.tool || "unknown";
-              const config = getToolConfig(toolId);
-              const found = item.found ?? 0;
-              const isSuccess = found > 0;
-              const stage = isSuccess ? "complete" : "failed";
-
-              const statusText = formatToolStatus(toolId, stage, {
-                query: item.query,
-                count: found,
-                resource: item.query?.split(":")[0],
-              });
-
-              return (
-                <div
-                  key={item.id}
-                  className={`flex items-center gap-1.5 text-muted-foreground ${opacity} transition-opacity duration-1000`}
-                >
-                  <span className={isSuccess ? "text-green-600 dark:text-green-400" : "text-yellow-600 dark:text-yellow-400"}>
-                    {isSuccess ? "✓" : "○"}
-                  </span>
-                  <span className="truncate max-w-[300px]">{statusText}</span>
-                </div>
-              );
-            }
-
-            return null;
-          })}
-        </div>
-      )}
-
-      {/* Current action status line - searching indicator, thinking, or initial loading verb */}
-      {action && (
-        <div className={`flex items-center gap-2 py-1 text-xs font-mono ${
-          action.type === "thinking" ? "text-muted-foreground/60" : ""
-        }`}>
-          <span className={action.type === "thinking" ? "" : "animate-shimmer"}>{action.icon}</span>
-          <span className={`font-medium ${action.type === "thinking" ? "" : "animate-shimmer"}`}>{action.text}</span>
-          {action.type !== "thinking" && <AnimatedDots />}
-          {action.subtext && (
-            <>
-              <span className="opacity-30">|</span>
-              <span className="opacity-60 truncate max-w-[200px]">{action.subtext}</span>
-            </>
-          )}
-          {/* Elapsed time and token count */}
-          {(elapsedTime !== undefined || tokenCount !== undefined) && (
-            <span className="ml-auto flex items-center gap-2 opacity-60">
-              {elapsedTime !== undefined && (
-                <span>{formatElapsedTime(elapsedTime)}</span>
-              )}
-              {tokenCount !== undefined && tokenCount > 0 && (
-                <>
-                  <span className="opacity-40">·</span>
-                  <span>{formatTokenCount(tokenCount)} tokens</span>
-                </>
-              )}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Show searching status when actively searching (tool calls in progress, no specific action) */}
-      {!action && activityLog.some(a => a.type === "tool_call") && (
-        <div className="flex items-center gap-2 py-1 text-xs font-mono">
-          <span className="animate-shimmer">✦</span>
-          <span className="font-medium animate-shimmer">{currentVerb}</span>
-          <AnimatedDots />
-          {(elapsedTime !== undefined || tokenCount !== undefined) && (
-            <span className="ml-auto flex items-center gap-2 opacity-60">
-              {elapsedTime !== undefined && (
-                <span>{formatElapsedTime(elapsedTime)}</span>
-              )}
-              {tokenCount !== undefined && tokenCount > 0 && (
-                <>
-                  <span className="opacity-40">·</span>
-                  <span>{formatTokenCount(tokenCount)} tokens</span>
-                </>
-              )}
-            </span>
-          )}
-        </div>
-      )}
-
-    </div>
-  );
-}
 
 // Custom hook to detect mobile screens
 function useIsMobile(breakpoint: number = 768) {
@@ -608,22 +225,14 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     ? (Date.now() / 1000) - parseFloat(currentJobState.started_at)
     : 0;
 
-  // Current phase and action (what agent is doing NOW)
+  // Current phase (what agent is doing NOW)
   const agentPhase = currentJobState?.thread_id === threadId ? currentJobState?.current_phase : "idle";
-  const agentAction = currentJobState?.thread_id === threadId ? currentJobState?.current_action : "";
 
   // Activity history from agent
   const agentActivity = (currentJobState?.thread_id === threadId ? currentJobState?.activity : []) || [];
 
-  // Thinking content from agent
-  const agentThinking = currentJobState?.thread_id === threadId ? currentJobState?.thinking : "";
-  const isThinking = agentPhase === "thinking" && !!agentThinking;
-
-  // Get acknowledgment from job state (not current_action which gets cleared)
+  // Get acknowledgment from job state
   const acknowledgment = currentJobState?.thread_id === threadId ? currentJobState?.acknowledgment || "" : "";
-  const currentAction = agentPhase === "searching" ? "searching" :
-    agentPhase === "responding" ? "responding" :
-    agentPhase === "idle" || agentPhase === "done" ? "idle" : "thinking";
 
   // Convert agent activity to ActivityLogItem format for UI
   const activityLog: ActivityLogItem[] = agentActivity
@@ -860,24 +469,29 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
     const targetId = pendingScrollToMessageRef.current;
     if (!targetId) return;
 
-    // Clear immediately to prevent re-triggering
     pendingScrollToMessageRef.current = null;
 
     const userMessageEl = document.getElementById(`message-${targetId}`);
     const scrollContainer = scrollRef.current;
-
     if (!userMessageEl || !scrollContainer) return;
 
-    // Get the banner height if it exists (for subthreads)
+    // Use getBoundingClientRect for accurate positioning
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const messageRect = userMessageEl.getBoundingClientRect();
+
+    // Calculate where the message currently is relative to container top
+    const messageOffsetFromContainerTop = messageRect.top - containerRect.top;
+
+    // Account for banner if present
     const banner = document.getElementById('subthread-banner');
     const bannerHeight = banner?.offsetHeight || 0;
+    const topPadding = 16; // Desired padding from top (or below banner)
 
-    // Calculate target scroll position using offsetTop (relative to scroll content)
-    // We want the user message at top of visible area, below any sticky banner
-    const messageOffsetTop = userMessageEl.offsetTop;
-    const targetScroll = messageOffsetTop - bannerHeight - 24; // 24px padding
+    // Calculate new scroll position
+    const currentScroll = scrollContainer.scrollTop;
+    const targetScroll = currentScroll + messageOffsetFromContainerTop - bannerHeight - topPadding;
 
-    scrollContainer.scrollTo({ top: Math.max(0, targetScroll), behavior: 'instant' });
+    scrollContainer.scrollTop = Math.max(0, targetScroll);
   }, [messages]);
 
   // Handle job state snapshots from context (when subscribing to a thread)
@@ -1231,7 +845,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
   }, [input, isLoading, projectId, threadId, messages, contextOnly, threadTitle, onThreadTitleGenerated, subscribeToThread, invalidateMessageCache]);
 
   return (
-    <div className="relative h-full flex flex-col" ref={chatContainerRef}>
+    <div className="relative h-full" ref={chatContainerRef}>
       {/* Text selection menu for Dive Deeper / Save Finding */}
       <TextSelectionMenu
         onDiveDeeper={handleDiveDeeper}
@@ -1239,9 +853,9 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         containerRef={chatContainerRef}
       />
 
-      {/* Scrollable messages area - banner is sticky INSIDE for proper scroll behavior */}
+      {/* Scrollable messages area - fills entire container, padding at bottom for input */}
       <div
-        className="flex-1 overflow-y-auto chat-scrollbar"
+        className="absolute inset-0 overflow-y-auto chat-scrollbar pb-24"
         ref={scrollRef}
       >
         {/* Sticky context banner for child threads (subthreads) */}
@@ -1277,8 +891,8 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
           </div>
         )}
 
-        {/* Messages container with padding - extra top padding for first message breathing room */}
-        <div className="px-3 md:px-4 pt-6 pb-3 md:pb-4">
+        {/* Messages container with padding */}
+        <div className="px-3 md:px-4 pt-4 pb-3 md:pb-4">
         <div className="space-y-3 md:space-y-4 pb-4">
           {!messagesLoaded ? (
             // Show loading state while messages are being fetched
@@ -1294,27 +908,17 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
             messages.map((message, index) => {
               // Give the last assistant message min-height during active conversation
               // This creates scroll room so user's message can scroll to top
-              // Keep it while in conversation to prevent layout shift when streaming ends
               const needsScrollRoom =
                 message.role === "assistant" &&
                 index === messages.length - 1 &&
                 isInConversationRef.current;
-
-              // scroll-margin-top tells browser to add space when using scrollIntoView
-              // This ensures messages scroll to below the sticky banner in subthreads
-              // Banner is ~63px, so 72px puts message 9px below it
-              // Regular threads get 24px to match container's top padding
-              const scrollMargin = parentThreadId ? '80px' : '24px';
 
               return (
               <div
                 key={message.id}
                 id={`message-${message.id}`}
                 className={`flex ${message.role === "user" ? `justify-end ${index > 0 ? "mt-6 md:mt-8" : ""}` : "justify-start"}`}
-                style={{
-                  ...(needsScrollRoom ? { minHeight: 'calc(100vh - 200px)' } : {}),
-                  scrollMarginTop: scrollMargin
-                }}
+                style={needsScrollRoom ? { minHeight: 'calc(100vh - 200px)' } : undefined}
               >
                 <div
                   className={`max-w-[90%] md:max-w-3xl rounded-lg px-3 md:px-4 py-2 ${
@@ -1326,21 +930,7 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
                   <div className="">
                     {message.role === "assistant" ? (
                       <>
-                        {/* 1. Status panel - shows acknowledgment first, then activity log */}
-                        {isLoading && message.id === currentMessageId && (
-                          <AgentStatusPanel
-                            activityLog={activityLog}
-                            isThinking={isThinking}
-                            thinkingContent={agentThinking || ""}
-                            currentAction={currentAction}
-                            resourceNames={resources.filter(r => r.status === "ready").map(r => r.filename || r.source || "document")}
-                            elapsedTime={elapsedTime}
-                            tokenCount={tokenCount}
-                            acknowledgment={acknowledgment}
-                            hasContent={!!message.content}
-                          />
-                        )}
-                        {/* 2. Response content - streams below the status */}
+                        {/* Response content */}
                         {(message.content || !isLoading) && (
                           <div className={message.isQuestion && !isLoading ? "flex items-start gap-2" : ""}>
                             {message.isQuestion && !isLoading && (
@@ -1554,14 +1144,25 @@ export function ChatInterface({ projectId, threadId, threadTitle, parentThreadId
         </div>
       </div>
 
-      {/* Fixed input at bottom */}
+      {/* Input area - absolutely positioned at bottom, completely out of document flow */}
       {(() => {
         const lastMessage = messages[messages.length - 1];
         const isRespondMode = lastMessage?.isQuestion && !isLoading;
         return (
-          <div className="flex-shrink-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-background">
-              {/* Floating input container */}
-              <div className="border border-border bg-card rounded-xl shadow-sm overflow-hidden">
+          <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5 sm:p-3 md:p-4 pb-[max(0.375rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-background via-background to-transparent pt-6">
+              {/* Agent activity panel - positioned above input */}
+              <div className="mb-1">
+                <AgentActivityPanel
+                  isActive={isLoading}
+                  activityLog={activityLog}
+                  currentPhase={agentPhase || "idle"}
+                  acknowledgment={acknowledgment}
+                  elapsedTime={Math.floor(elapsedTime)}
+                  tokenCount={tokenCount}
+                />
+              </div>
+              {/* Input container */}
+              <div className="border border-border bg-card shadow-sm overflow-hidden rounded-xl">
                 {/* Single row input on mobile, two rows on desktop */}
                 <div className="flex items-end gap-1.5 p-1.5 sm:p-2 sm:pb-0">
                   <Textarea
