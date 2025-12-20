@@ -119,6 +119,71 @@ class NotificationType(str, enum.Enum):
     JOB_FAILED = "job_failed"
 
 
+class TestRunStatus(str, enum.Enum):
+    """Status of a test run."""
+    PENDING = "pending"        # Run created, not started
+    PROCESSING = "processing"  # Currently running through pipeline
+    SUCCESS = "success"        # Completed with chunks created
+    FAILED = "failed"          # Processing failed completely
+    PARTIAL = "partial"        # Extraction worked but enrichment failed
+
+
+class TestResource(Base):
+    """A test resource - problematic files/URLs kept for regression testing.
+
+    These are stored separately from production resources and can be
+    re-processed on demand to measure system improvement.
+    """
+    __tablename__ = "test_resources"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False)  # Human-readable name
+    description = Column(Text, nullable=True)  # Notes about why this is problematic
+    type = Column(Enum(ResourceType), nullable=False)  # document, website, git_repository, etc.
+    filename = Column(String, nullable=True)  # Original filename for uploads
+    storage_path = Column(String, nullable=False)  # Path in test storage (test_uploads/{id}/{filename})
+    file_size_bytes = Column(Integer, nullable=True)
+    content_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Source info for URLs/git (not file uploads)
+    source_url = Column(String, nullable=True)  # For websites/git repos
+    git_branch = Column(String, nullable=True)  # For git repos
+
+    # Relationships
+    runs = relationship("TestRun", back_populates="test_resource", cascade="all, delete-orphan")
+
+
+class TestRun(Base):
+    """A single test run of a test resource through the RAG pipeline.
+
+    Each run captures metrics and results for comparison over time.
+    """
+    __tablename__ = "test_runs"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    test_resource_id = Column(String, ForeignKey("test_resources.id", ondelete="CASCADE"), nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Processing results
+    status = Column(Enum(TestRunStatus), default=TestRunStatus.PENDING, nullable=False)
+    error_message = Column(Text, nullable=True)
+
+    # Metrics captured
+    extraction_duration_ms = Column(Integer, nullable=True)
+    indexing_duration_ms = Column(Integer, nullable=True)
+    total_duration_ms = Column(Integer, nullable=True)
+    chunk_count = Column(Integer, nullable=True)
+    summary = Column(Text, nullable=True)  # LLM-generated summary
+
+    # Raw response data for inspection
+    raw_metadata = Column(Text, nullable=True)  # JSON blob for debugging
+
+    # Relationships
+    test_resource = relationship("TestResource", back_populates="runs")
+
+
 class User(Base):
     """User account for authentication."""
     __tablename__ = "users"
@@ -896,6 +961,50 @@ def _run_incremental_migrations():
                 if "chunk_count" not in columns:
                     conn.execute(text("ALTER TABLE resources ADD COLUMN chunk_count INTEGER"))
                     print("[Migration] Added chunk_count column to resources")
+
+            # Migration 21: Create test_resources and test_runs tables for Test Suite
+            if "test_resources" not in existing_tables:
+                is_postgres = 'postgresql' in str(engine.url)
+                datetime_type = "TIMESTAMP" if is_postgres else "DATETIME"
+
+                conn.execute(text(f"""
+                    CREATE TABLE test_resources (
+                        id VARCHAR PRIMARY KEY,
+                        name VARCHAR NOT NULL,
+                        description TEXT,
+                        type VARCHAR NOT NULL,
+                        filename VARCHAR,
+                        storage_path VARCHAR NOT NULL,
+                        file_size_bytes INTEGER,
+                        content_hash VARCHAR(64),
+                        created_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                        source_url VARCHAR,
+                        git_branch VARCHAR
+                    )
+                """))
+                print("[Migration] Created test_resources table")
+
+            if "test_runs" not in existing_tables:
+                is_postgres = 'postgresql' in str(engine.url)
+                datetime_type = "TIMESTAMP" if is_postgres else "DATETIME"
+
+                conn.execute(text(f"""
+                    CREATE TABLE test_runs (
+                        id VARCHAR PRIMARY KEY,
+                        test_resource_id VARCHAR NOT NULL REFERENCES test_resources(id) ON DELETE CASCADE,
+                        started_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                        completed_at {datetime_type},
+                        status VARCHAR NOT NULL DEFAULT 'pending',
+                        error_message TEXT,
+                        extraction_duration_ms INTEGER,
+                        indexing_duration_ms INTEGER,
+                        total_duration_ms INTEGER,
+                        chunk_count INTEGER,
+                        summary TEXT,
+                        raw_metadata TEXT
+                    )
+                """))
+                print("[Migration] Created test_runs table")
 
             trans.commit()
         except Exception as e:

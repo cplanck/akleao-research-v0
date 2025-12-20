@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
-from api.routers import projects, threads, resources, query, messages, findings, jobs, notifications, websocket, auth
+from api.routers import projects, threads, resources, query, messages, findings, jobs, notifications, websocket, auth, test_resources
 
 app = FastAPI(
     title="Akleao Research API",
@@ -56,6 +56,7 @@ app.include_router(findings.router)
 app.include_router(jobs.router)
 app.include_router(notifications.router)
 app.include_router(websocket.router)
+app.include_router(test_resources.router)
 
 
 @app.on_event("startup")

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from pydantic import BaseModel
-from api.database import ResourceType, ResourceStatus, MessageRole
+from api.database import ResourceType, ResourceStatus, MessageRole, TestRunStatus
 
 
 # Project schemas
@@ -254,3 +254,68 @@ class SemanticSearchResult(BaseModel):
 class SemanticSearchResponse(BaseModel):
     results: list[SemanticSearchResult]
     query: str
+
+
+# Test Suite schemas
+class TestResourceCreate(BaseModel):
+    name: str
+    description: str | None = None
+    type: ResourceType
+
+
+class TestResourceUrlCreate(BaseModel):
+    name: str
+    description: str | None = None
+    url: str
+
+
+class TestResourceGitCreate(BaseModel):
+    name: str
+    description: str | None = None
+    url: str
+    branch: str | None = None
+
+
+class TestRunResponse(BaseModel):
+    id: str
+    test_resource_id: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: TestRunStatus
+    error_message: str | None = None
+    extraction_duration_ms: int | None = None
+    indexing_duration_ms: int | None = None
+    total_duration_ms: int | None = None
+    chunk_count: int | None = None
+    summary: str | None = None
+    raw_metadata: dict | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class TestResourceResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    type: ResourceType
+    filename: str | None = None
+    storage_path: str
+    file_size_bytes: int | None = None
+    content_hash: str | None = None
+    created_at: datetime
+    source_url: str | None = None
+    git_branch: str | None = None
+    last_run: TestRunResponse | None = None  # Most recent run
+
+    class Config:
+        from_attributes = True
+
+
+class TestResourceWithRunsResponse(TestResourceResponse):
+    runs: list[TestRunResponse] = []
+
+
+class RunAllResponse(BaseModel):
+    message: str
+    run_ids: list[str]

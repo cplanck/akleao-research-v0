@@ -8,6 +8,7 @@ import { ChatInterface } from "@/components/chat-interface";
 import { UserAvatar } from "@/components/user-avatar";
 import { Menu, Plus, Folder, Home, Library, ListChecks, Lightbulb, ChevronRight, CornerDownRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import Image from "next/image";
 import {
   Dialog,
   DialogContent,
@@ -699,7 +700,7 @@ export default function ProjectPage() {
     <div className="h-dvh bg-background overflow-hidden">
       <ResizablePanelGroup direction="horizontal" className="h-full" autoSaveId="project-layout">
         {/* Left sidebar - Project selector and Threads */}
-        <ResizablePanel defaultSize={15} minSize={10} maxSize={25}>
+        <ResizablePanel defaultSize={15} minSize={25} maxSize={25}>
           <div className="h-full border-r flex flex-col bg-background">
             {/* Project selector */}
             <div className="px-3 py-2 border-b">
@@ -709,32 +710,15 @@ export default function ProjectPage() {
                     variant="ghost"
                     size="sm"
                     className="h-8 w-8 p-0"
-                    title="All Projects"
+                    title="Home -- view projects"
+                    asChild={true}
                   >
-                    <Home className="h-4 w-4" />
+                    <>
+                    <Image src="/logos/logo-emblem-light.png" alt="Akleao" width={30} height={30} className="hidden dark:block"/>
+                    <Image src="/logos/logo-emblem-dark.png" alt="Akleao" width={30} height={30} className="block dark:hidden" />
+                    </>
                   </Button>
                 </Link>
-                <Select
-                  value={selectedProject?.id || ""}
-                  onValueChange={handleSelectProject}
-                >
-                  <SelectTrigger className="flex-1 h-8 text-sm">
-                    <SelectValue placeholder="Select project" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setIsProjectDialogOpen(true)}
-                >
-                  +
-                </Button>
               </div>
             </div>
 

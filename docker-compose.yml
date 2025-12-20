@@ -57,8 +57,11 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
     volumes:
+      - ./api:/app/api
+      - ./rag:/app/rag
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
+      - ./test_uploads:/app/test_uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,8 +95,11 @@ services:
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-akleao-research}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
     volumes:
+      - ./api:/app/api
+      - ./rag:/app/rag
       - ./uploads:/app/uploads
       - ./git_repos:/app/git_repos
+      - ./test_uploads:/app/test_uploads
     depends_on:
       postgres:
         condition: service_healthy

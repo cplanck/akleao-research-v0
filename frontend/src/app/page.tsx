@@ -15,6 +15,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { Project, listProjects, createProject, deleteProject, createThread } from "@/lib/api";
 import Link from "next/link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import Image from "next/image";
 
 // Folder icon component
 function FolderIcon({ className }: { className?: string }) {
@@ -179,7 +180,12 @@ export default function Home() {
       {/* Header */}
       <header className="border-b">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Akleao</h1>
+          <Link href="/">
+            <Button variant="ghost" size="sm" className="gap-2">
+              <Image src="/logos/logo-emblem-light.png" alt="Akleao" width={30} height={30} className="hidden dark:block"/>
+              <Image src="/logos/logo-emblem-dark.png" alt="Akleao" width={30} height={30} className="block dark:hidden" />
+            </Button>
+          </Link>
           <div className="flex items-center gap-2">
             <Link href="/library">
               <Button variant="ghost" size="sm" className="gap-2">

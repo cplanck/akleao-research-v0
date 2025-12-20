@@ -197,7 +197,8 @@ class RAGPipeline:
         question: str,
         top_k: int = 5,
         namespace: str = "",
-        return_sources: bool = False
+        return_sources: bool = False,
+        system_prompt: str = None
     ) -> str | dict:
         """Query the RAG system with a question."""
         if not self._initialized:
@@ -211,7 +212,7 @@ class RAGPipeline:
         )
 
         # Generate response
-        response = self.llm.generate_with_results(question, results)
+        response = self.llm.generate_with_results(question, results, system_prompt=system_prompt)
 
         if return_sources:
             return {
